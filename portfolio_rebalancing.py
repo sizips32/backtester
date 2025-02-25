@@ -128,7 +128,8 @@ def show_portfolio_rebalancing():
         
         rebalancing_method = st.selectbox(
             "리밸런싱 방식",
-            ["임계값 기반", "정기 리밸런싱", "복합 방식"]
+            ["임계값 기반", "정기 리밸런싱", "복합 방식"],
+            label_visibility="visible"
         )
         
         st.markdown("### 📌 선택한 방식 설명")

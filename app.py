@@ -41,8 +41,9 @@ def main():
     """, unsafe_allow_html=True)
     
     menu = st.sidebar.selectbox(
-        "",  # 라벨 제거
-        list(MENU_OPTIONS.keys())
+        "메뉴",  # 라벨 추가
+        list(MENU_OPTIONS.keys()),
+        label_visibility="hidden"  # 라벨을 시각적으로 숨김
     )
     
     MENU_OPTIONS[menu]()

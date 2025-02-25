@@ -8,8 +8,9 @@ def show_portfolio_composition():
     
     # 투자 스타일 선택
     investment_style = st.radio(
-        "투자 스타일을 선택하세요:",
-        ["보수적 투자자", "균형적 투자자", "공격적 투자자"]
+        "투자 스타일",
+        ["보수적 투자자", "균형적 투자자", "공격적 투자자"],
+        label_visibility="visible"  # 라벨을 명시적으로 표시
     )
     
     # 초기 자산 입력

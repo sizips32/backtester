@@ -9,7 +9,7 @@ from scipy import stats
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-import time
+import FinanceDataReader as fdr
 
 # 데이터베이스 모듈 import
 from utils.db import (
@@ -29,29 +29,41 @@ def refresh_portfolios():
     """포트폴리오 목록을 새로고침"""
     st.session_state.portfolios = get_all_portfolios()
 
-# 실시간 주가 가져오기
 def fetch_current_price(stock):
     """실시간 주가를 가져옵니다."""
     try:
-        ticker = yf.Ticker(stock)
-        hist = ticker.history(period='2d')
+        # 한국 주식인지 확인
+        is_korean = (
+            (len(stock) in [6, 7] and stock.isdigit()) or 
+            stock.endswith('.KS') or 
+            stock.endswith('.KQ')
+        )
         
-        if hist.empty:
-            return None, "주가 데이터를 가져올 수 없습니다."
-
-        last_valid_close = hist['Close'].iloc[-1]
-        if pd.isna(last_valid_close):
-            last_valid_close = hist['Close'].iloc[-2]
-
-        if pd.isna(last_valid_close):
-            return None, "유효한 종가를 찾을 수 없습니다."
-
-        return float(last_valid_close), None
+        # 심볼 정리
+        if is_korean:
+            clean_symbol = stock.replace('.KS', '').replace('.KQ', '')
+        else:
+            clean_symbol = stock.replace('^', '')  # ^GSPC와 같은 특수 심볼 처리
+        
+        # FinanceDataReader로 현재가 조회
+        df = fdr.DataReader(clean_symbol)
+        if len(df) > 0:
+            return float(df['Close'].iloc[-1]), None
+        
+        # fdr 실패시 yfinance로 시도
+        ticker = yf.Ticker(stock)
+        info = ticker.info
+        
+        if 'regularMarketPrice' in info and info['regularMarketPrice'] is not None:
+            return float(info['regularMarketPrice']), None
+        elif 'currentPrice' in info and info['currentPrice'] is not None:
+            return float(info['currentPrice']), None
+        
+        return None, "가격 정보를 가져올 수 없습니다."
 
     except Exception as e:
         return None, f"오류 발생: {str(e)}"
 
-# 히스토리컬 데이터 가져오기
 def fetch_historical_data(symbols, start_date, end_date):
     """여러 종목의 히스토리컬 데이터를 가져옵니다."""
     data = {}
@@ -79,130 +91,73 @@ def fetch_historical_data(symbols, start_date, end_date):
         progress_bar.progress(progress_percent)
         status_text.text(f"{symbol} 데이터 가져오는 중... ({i+1}/{len(symbols)})")
         
-        # 종목 코드 형식 검증 및 변환
-        valid_symbol = symbol
-        
-        # 이미 .KS나 .KQ로 끝나는 경우 그대로 사용
-        if symbol.endswith('.KS') or symbol.endswith('.KQ'):
-            pass
-        # 한국 주식 번호 형식이면 접미사 시도
-        elif len(symbol) in [6, 7] and symbol.isdigit():
-            try_symbols = [f"{symbol}.KS", f"{symbol}.KQ"]  # 코스피, 코스닥 둘 다 시도
-            for try_symbol in try_symbols:
-                try:
-                    test_data = yf.download(try_symbol, period='1d', progress=False, timeout=10)
-                    if not test_data.empty:
-                        valid_symbol = try_symbol
-                        break
-                except Exception:
-                    continue
-        
-        # 재시도 카운터
-        retry_count = 0
-        max_retries = 3
-        
-        while retry_count < max_retries:
-            try:
-                # Yahoo Finance에서 데이터 다운로드 (타임아웃 추가)
-                ticker_data = yf.download(
-                    valid_symbol, start=start_date, end=end_date, progress=False, timeout=15
-                )
+        try:
+            # 한국 주식인지 확인
+            is_korean = (
+                (len(symbol) in [6, 7] and symbol.isdigit()) or 
+                symbol.endswith('.KS') or 
+                symbol.endswith('.KQ')
+            )
+            
+            # 심볼 정리
+            if is_korean:
+                clean_symbol = symbol.replace('.KS', '').replace('.KQ', '')
+            else:
+                clean_symbol = symbol.replace('^', '')  # ^GSPC와 같은 특수 심볼 처리
+            
+            # FinanceDataReader로 데이터 가져오기
+            df = fdr.DataReader(clean_symbol, start_date, end_date)
+            if len(df) > 0:
+                data[symbol] = df['Close']
+                continue
+            
+            # fdr 실패시 yfinance로 시도
+            df = yf.download(
+                symbol,
+                start=start_date,
+                end=end_date,
+                progress=False
+            )
+            
+            if len(df) > 0:
+                data[symbol] = df['Adj Close']
+            else:
+                failures.append((symbol, "데이터를 찾을 수 없습니다."))
                 
-                if ticker_data.empty and retry_count < max_retries - 1:
-                    # 비어있는 데이터가 반환되면 다른 날짜 범위로 재시도
-                    retry_count += 1
-                    status_text.text(f"{valid_symbol} 데이터 가져오기 재시도 중... ({retry_count}/{max_retries})")
-                    
-                    # 더 짧은 기간으로 재시도
-                    continue
-                
-                if not ticker_data.empty:
-                    # 'Adj Close' 열이 있으면 사용, 없으면 'Close' 열 사용
-                    if 'Adj Close' in ticker_data.columns:
-                        data[symbol] = ticker_data['Adj Close']
-                    elif 'Close' in ticker_data.columns:
-                        data[symbol] = ticker_data['Close']
-                        st.info(f"{symbol}: 'Adj Close' 열이 없어 'Close' 열을 사용합니다.")
-                    else:
-                        # 둘 다 없는 경우 실패로 처리
-                        if retry_count == max_retries - 1:
-                            failures.append((symbol, "데이터에 'Adj Close'와 'Close' 열이 모두 없습니다."))
-                            break
-                        retry_count += 1
-                        continue
-                    
-                    # 지연 추가 (연속적인 요청으로 인한 API 제한 방지)
-                    time.sleep(0.5)
-                    break  # 성공했으므로 while 루프 종료
-                
-                # 데이터가 비어있는 경우 실패로 처리
-                if retry_count == max_retries - 1:  # 마지막 시도 후 실패
-                    failures.append((symbol, "데이터가 비어있습니다."))
-                    break
-                
-                retry_count += 1
-                
-            except Exception as e:
-                error_msg = str(e)
-                
-                if retry_count < max_retries - 1:
-                    retry_count += 1
-                    status_text.text(f"{valid_symbol} 데이터 가져오기 재시도 중... ({retry_count}/{max_retries})")
-                    continue
-                
-                failures.append((symbol, error_msg))
-                st.warning(f"{symbol} 데이터 가져오기 실패: {error_msg}")
-                break
+        except Exception as e:
+            failures.append((symbol, str(e)))
     
-    # 진행 상태 UI 제거
     progress_bar.empty()
     status_text.empty()
     
-    # 결과 처리
     if not data:
         if failures:
-            st.error("모든 종목의 데이터를 가져오는데 실패했습니다:")
-            for symbol, reason in failures[:5]:  # 처음 5개 실패만 표시
+            st.error("데이터를 가져오는데 실패했습니다:")
+            for symbol, reason in failures[:5]:
                 st.error(f"• {symbol}: {reason}")
             if len(failures) > 5:
                 st.error(f"외 {len(failures)-5}개 종목 실패")
-            
-            # 추가 가이드 제공
-            st.info("다음 사항을 확인해보세요:")
-            st.info("1. 인터넷 연결이 안정적인지 확인하세요.")
-            st.info("2. 종목 코드가 정확한지 확인하세요.")
-            st.info("3. 분석 기간을 더 짧게 설정해보세요.")
-            st.info("4. 잠시 후 다시 시도해보세요.")
         return pd.DataFrame()
     
-    # 실패한 종목이 있다면 알림
-    if failures:
-        st.warning(f"{len(failures)}개 종목의 데이터를 가져오는데 실패했습니다. 성공한 종목으로만 분석을 진행합니다.")
-        for symbol, reason in failures[:3]:  # 처음 3개만 표시
-            st.warning(f"• {symbol}: {reason}")
-        if len(failures) > 3:
-            st.warning(f"외 {len(failures)-3}개 종목 실패")
-    
     try:
-        # 데이터를 DataFrame으로 변환
         df = pd.DataFrame(data)
         
-        # 결측치가 너무 많은지 확인
+        # 결측치 확인 및 처리
         na_percentage = df.isna().mean().mean() * 100
         if na_percentage > 50:
-            st.warning(f"가져온 데이터의 {na_percentage:.1f}%가 결측치입니다. 결과가 부정확할 수 있습니다.")
+            st.warning(
+                f"가져온 데이터의 {na_percentage:.1f}%가 결측치입니다. "
+                "결과가 부정확할 수 있습니다."
+            )
         
-        # NaN 값을 앞쪽 값으로 채우기 (첫날은 뒤쪽 값으로)
+        # NaN 값 처리
         df = df.fillna(method='ffill').fillna(method='bfill')
-        
-        # 너무 짧은 데이터인지 확인
-        if len(df) < 30:  # 최소 30일 데이터가 필요하다고 가정
-            st.warning(f"가져온 데이터가 너무 적습니다 ({len(df)}일). 분석 결과가 부정확할 수 있습니다.")
         
         # 캐시에 저장
         st.session_state.data_cache[cache_key] = df
         
         return df
+        
     except Exception as e:
         st.error(f"데이터프레임 생성 중 오류 발생: {str(e)}")
         return pd.DataFrame()
@@ -231,7 +186,10 @@ def calculate_risk_metrics(portfolio_returns, risk_free_rate=0.0):
     annual_volatility = portfolio_returns.std() * np.sqrt(annualization_factor)
     
     # 샤프 비율
-    sharpe_ratio = (annual_return - risk_free_rate) / annual_volatility if annual_volatility > 0 else 0
+    sharpe_ratio = (
+        (annual_return - risk_free_rate) / annual_volatility 
+        if annual_volatility > 0 else 0
+    )
     
     # 최대 낙폭 (MDD)
     cumulative_returns = (1 + portfolio_returns).cumprod()
@@ -245,7 +203,10 @@ def calculate_risk_metrics(portfolio_returns, risk_free_rate=0.0):
     # 소티노 비율 (하방 위험 고려)
     downside_returns = portfolio_returns[portfolio_returns < 0]
     downside_deviation = downside_returns.std() * np.sqrt(annualization_factor)
-    sortino_ratio = (annual_return - risk_free_rate) / downside_deviation if downside_deviation > 0 else 0
+    sortino_ratio = (
+        (annual_return - risk_free_rate) / downside_deviation 
+        if downside_deviation > 0 else 0
+    )
     
     return {
         "연간 기대 수익률": annual_return * 100,
@@ -323,27 +284,110 @@ def show_portfolio_management():
     
     # 포트폴리오 편집 탭
     with tabs[2]:
-        if st.session_state.current_portfolio_id:
-            portfolio = get_portfolio_by_id(st.session_state.current_portfolio_id)
+        if not st.session_state.portfolios:
+            st.info("생성된 포트폴리오가 없습니다. '포트폴리오 생성' 탭에서 새 포트폴리오를 생성해보세요.")
+            return
+
+        # 포트폴리오 선택 드롭다운
+        portfolio_names = {p['id']: p['name'] for p in st.session_state.portfolios}
+        selected_portfolio_id = st.selectbox(
+            "수정할 포트폴리오 선택",
+            options=list(portfolio_names.keys()),
+            format_func=lambda x: portfolio_names[x],
+            key="edit_portfolio_selector"
+        )
+        
+        if selected_portfolio_id:
+            portfolio = get_portfolio_by_id(selected_portfolio_id)
             if portfolio:
-                st.write(f"'{portfolio['name']}' 포트폴리오 편집")
+                st.write("---")
+                
+                # 현재 정보 표시
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.markdown(f"### {portfolio['name']}")
+                with col2:
+                    st.info(
+                        f"생성일: {portfolio['created_at']}\n"
+                        f"마지막 수정일: {portfolio['updated_at']}"
+                    )
+                
+                # 수정 폼
                 with st.form("edit_portfolio_form"):
-                    name = st.text_input("포트폴리오 이름", value=portfolio['name'])
-                    description = st.text_area("설명", value=portfolio['description'] or "")
+                    st.write("#### 포트폴리오 정보 수정")
                     
-                    submitted = st.form_submit_button("포트폴리오 업데이트")
+                    name = st.text_input(
+                        "포트폴리오 이름",
+                        value=portfolio['name'],
+                        help="포트폴리오의 새 이름을 입력하세요"
+                    )
+                    
+                    description = st.text_area(
+                        "설명",
+                        value=portfolio['description'] or "",
+                        height=100,
+                        help="포트폴리오에 대한 설명을 입력하세요"
+                    )
+                    
+                    col1, col2, col3 = st.columns([1, 1, 1])
+                    with col2:
+                        submitted = st.form_submit_button(
+                            "변경사항 저장",
+                            use_container_width=True,
+                            type="primary"
+                        )
+                    
                     if submitted:
                         if not name:
                             st.error("포트폴리오 이름을 입력해주세요.")
+                        elif name == portfolio['name'] and description == portfolio['description']:
+                            st.warning("변경된 내용이 없습니다.")
                         else:
-                            if update_portfolio(portfolio['id'], name, description):
-                                refresh_portfolios()
-                                st.success("포트폴리오 정보가 업데이트되었습니다.")
-                                st.rerun()
-                            else:
-                                st.error("포트폴리오 업데이트 중 오류가 발생했습니다.")
+                            try:
+                                if update_portfolio(
+                                    portfolio['id'],
+                                    name,
+                                    description
+                                ):
+                                    refresh_portfolios()
+                                    st.success(
+                                        f"'{portfolio['name']}' 포트폴리오가 "
+                                        f"'{name}'(으)로 업데이트되었습니다."
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.error(
+                                        "포트폴리오 업데이트 중 "
+                                        "오류가 발생했습니다."
+                                    )
+                            except Exception as e:
+                                st.error(
+                                    "포트폴리오 업데이트 중 "
+                                    f"오류 발생: {str(e)}"
+                                )
+                
+                # 포트폴리오 삭제 섹션
+                st.write("---")
+                st.write("#### 포트폴리오 삭제")
+                st.warning(
+                    "⚠️ 주의: 포트폴리오를 삭제하면 모든 보유 종목 정보도 함께 삭제됩니다. "
+                    "이 작업은 되돌릴 수 없습니다."
+                )
+                
+                if st.button(
+                    "포트폴리오 삭제",
+                    key="delete_portfolio_edit",
+                    type="secondary"
+                ):
+                    if delete_portfolio(portfolio['id']):
+                        st.session_state.current_portfolio_id = None
+                        refresh_portfolios()
+                        st.success(f"'{portfolio['name']}' 포트폴리오가 삭제되었습니다.")
+                        st.rerun()
+                    else:
+                        st.error("포트폴리오 삭제 중 오류가 발생했습니다.")
         else:
-            st.info("편집할 포트폴리오를 먼저 선택해주세요.")
+            st.info("편집할 포트폴리오를 선택해주세요.")
 
 # 종목 추가 함수
 def add_investment(portfolio_id, symbol, quantity, purchase_price, purchase_date, asset_type):
@@ -433,26 +477,76 @@ def show_portfolio_holdings():
             holdings_data = []
             total_value = 0
             
-            for holding in holdings:
-                current_price, _ = fetch_current_price(holding['symbol'])
-                market_value = holding['quantity'] * (current_price or 0)
-                gain_loss = market_value - (holding['quantity'] * holding['purchase_price'])
-                gain_loss_pct = (gain_loss / (holding['quantity'] * holding['purchase_price'])) * 100 if holding['purchase_price'] > 0 else 0
-                
-                total_value += market_value
-                
-                holdings_data.append({
-                    'ID': holding['id'],
-                    '종목': holding['symbol'],
-                    '보유수량': holding['quantity'],
-                    '매수가': holding['purchase_price'],
-                    '현재가': current_price or 0,
-                    '시장가치': market_value,
-                    '손익': gain_loss,
-                    '손익(%)': gain_loss_pct,
-                    '자산유형': holding['asset_type'],
-                    '매수일': holding['purchase_date'] or '정보 없음'
-                })
+            with st.spinner("현재가를 가져오는 중..."):
+                for holding in holdings:
+                    symbol = holding['symbol']
+                    current_price = None
+                    error_msg = None
+                    
+                    # 한국 주식 여부 확인
+                    is_korean = (
+                        (len(symbol) in [6, 7] and symbol.isdigit()) or 
+                        symbol.endswith('.KS') or 
+                        symbol.endswith('.KQ')
+                    )
+                    
+                    if is_korean:
+                        try:
+                            clean_symbol = symbol.replace('.KS', '').replace('.KQ', '')
+                            df = fdr.DataReader(clean_symbol)
+                            if len(df) > 0:
+                                current_price = df['Close'].iloc[-1]
+                        except Exception:
+                            pass
+                    
+                    # fdr로 실패했거나 해외 주식인 경우
+                    if current_price is None:
+                        if is_korean and not (
+                            symbol.endswith('.KS') or 
+                            symbol.endswith('.KQ')
+                        ):
+                            for suffix in ['.KS', '.KQ']:
+                                test_symbol = f"{symbol}{suffix}"
+                                price, msg = fetch_current_price(test_symbol)
+                                if price is not None:
+                                    current_price = price
+                                    symbol = test_symbol
+                                    break
+                        
+                        if current_price is None:
+                            current_price, error_msg = fetch_current_price(symbol)
+                    
+                    if current_price is None:
+                        st.warning(
+                            f"{symbol}: {error_msg or '가격 정보를 가져올 수 없습니다.'}"
+                        )
+                        current_price = 0
+                    
+                    market_value = holding['quantity'] * current_price
+                    gain_loss = (
+                        market_value - 
+                        (holding['quantity'] * holding['purchase_price'])
+                    )
+                    gain_loss_pct = (
+                        (gain_loss / 
+                         (holding['quantity'] * holding['purchase_price'])) * 100 
+                        if holding['purchase_price'] > 0 else 0
+                    )
+                    
+                    total_value += market_value
+                    
+                    holdings_data.append({
+                        'ID': holding['id'],
+                        '종목': symbol,
+                        '보유수량': holding['quantity'],
+                        '매수가': holding['purchase_price'],
+                        '현재가': current_price,
+                        '시장가치': market_value,
+                        '손익': gain_loss,
+                        '손익(%)': gain_loss_pct,
+                        '자산유형': holding['asset_type'],
+                        '매수일': holding['purchase_date'] or '정보 없음'
+                    })
             
             # 데이터프레임 생성
             df = pd.DataFrame(holdings_data)
@@ -463,103 +557,135 @@ def show_portfolio_holdings():
             else:
                 df['비중(%)'] = 0
             
+            # 표시용 데이터프레임 생성 및 포맷팅
+            display_df = df.copy()
+            
+            # 숫자 포맷팅
+            display_df['현재가'] = display_df['현재가'].map('${:,.2f}'.format)
+            display_df['시장가치'] = display_df['시장가치'].map('${:,.2f}'.format)
+            display_df['손익'] = display_df['손익'].map('${:,.2f}'.format)
+            display_df['손익(%)'] = display_df['손익(%)'].map('{:,.2f}%'.format)
+            display_df['비중(%)'] = display_df['비중(%)'].map('{:,.2f}%'.format)
+            
             # 데이터프레임 표시
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(display_df, use_container_width=True)
             
             # 포트폴리오 가치 합계 표시
             st.metric("포트폴리오 총 가치", f"${total_value:,.2f}")
             
-            # 원형 차트로 자산 분포 표시
-            st.subheader('자산 분포')
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.pie(df['시장가치'], labels=df['종목'], autopct='%1.1f%%', startangle=90)
-            ax.axis('equal')
-            st.pyplot(fig)
+            # 종목 수정/삭제 섹션
+            st.write("---")
+            st.subheader("보유 종목 수정")
             
-            # 종목 관리 섹션
-            st.subheader('종목 관리')
+            # 종목 선택
+            selected_holding_id = st.selectbox(
+                "수정할 종목 선택",
+                options=[h['ID'] for h in holdings_data],
+                format_func=lambda x: next(
+                    h['종목'] for h in holdings_data if h['ID'] == x
+                )
+            )
             
-            # 종목 관리 탭 생성
-            manage_tabs = st.tabs(["종목 편집", "종목 삭제"])
-            
-            # 종목 편집 탭
-            with manage_tabs[0]:
-                st.write("기존 종목 정보를 수정합니다.")
-                
-                # 편집할 종목 선택
-                holding_to_edit = st.selectbox(
-                    "편집할 종목 선택",
-                    options=[h['id'] for h in holdings],
-                    format_func=lambda x: next((h['symbol'] for h in holdings if h['id'] == x), ''),
-                    key="holding_to_edit"
+            if selected_holding_id:
+                selected_holding = next(
+                    h for h in holdings_data if h['ID'] == selected_holding_id
                 )
                 
-                # 선택한 종목의 정보 가져오기
-                selected_holding = next((h for h in holdings if h['id'] == holding_to_edit), None)
-                
-                if selected_holding:
-                    with st.form("edit_holding_form"):
-                        # 종목 기본 정보 표시
-                        st.write(f"**종목:** {selected_holding['symbol']}")
-                        
-                        # 편집 가능한 필드
+                with st.form("edit_holding_form"):
+                    st.write(f"#### {selected_holding['종목']} 수정")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
                         quantity = st.number_input(
-                            "수량",
+                            "보유수량",
                             min_value=0.0,
-                            value=float(selected_holding['quantity'])
+                            value=float(selected_holding['보유수량']),
+                            step=0.01
                         )
                         
                         purchase_price = st.number_input(
                             "매수가",
                             min_value=0.0,
-                            value=float(selected_holding['purchase_price'])
+                            value=float(selected_holding['매수가']),
+                            step=0.01
                         )
-                        
-                        # 날짜가 없으면 현재 날짜를 기본값으로 설정
-                        default_date = datetime.strptime(selected_holding['purchase_date'], '%Y-%m-%d') if selected_holding['purchase_date'] else datetime.now()
+                    
+                    with col2:
                         purchase_date = st.date_input(
                             "매수일",
-                            value=default_date
+                            value=datetime.strptime(
+                                selected_holding['매수일'], 
+                                '%Y-%m-%d'
+                            ) if selected_holding['매수일'] != '정보 없음' 
+                            else datetime.now()
                         )
                         
                         asset_type = st.selectbox(
                             "자산 유형",
                             options=['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity'],
-                            index=['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity'].index(selected_holding['asset_type']) if selected_holding['asset_type'] in ['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity'] else 0
+                            index=['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity'].index(
+                                selected_holding['자산유형']
+                            )
                         )
-                        
-                        submitted = st.form_submit_button("종목 정보 업데이트")
-                        
-                        if submitted:
-                            if edit_investment(
-                                holding_to_edit,
-                                quantity,
-                                purchase_price,
-                                purchase_date.strftime('%Y-%m-%d'),
-                                asset_type
-                            ):
-                                st.success("종목 정보가 성공적으로 업데이트되었습니다.")
-                                st.rerun()
-            
-            # 종목 삭제 탭
-            with manage_tabs[1]:
-                st.write("종목을 포트폴리오에서 삭제합니다.")
+                    
+                    col1, col2, col3 = st.columns([1, 1, 1])
+                    with col2:
+                        submitted = st.form_submit_button(
+                            "변경사항 저장",
+                            use_container_width=True,
+                            type="primary"
+                        )
+                    
+                    if submitted:
+                        if edit_investment(
+                            selected_holding_id,
+                            quantity,
+                            purchase_price,
+                            purchase_date.strftime('%Y-%m-%d'),
+                            asset_type
+                        ):
+                            st.success("종목이 성공적으로 수정되었습니다.")
+                            st.rerun()
                 
-                holding_to_delete = st.selectbox(
-                    "삭제할 종목 선택",
-                    options=[h['id'] for h in holdings],
-                    format_func=lambda x: next((h['symbol'] for h in holdings if h['id'] == x), ''),
-                    key="holding_to_delete"
+                # 종목 삭제 섹션
+                st.write("---")
+                st.write("#### 종목 삭제")
+                st.warning(
+                    "⚠️ 주의: 종목을 삭제하면 관련된 모든 정보가 영구적으로 삭제됩니다."
                 )
                 
-                if st.button("종목 삭제", key="delete_holding_button"):
-                    if delete_holding(holding_to_delete):
-                        st.success("종목이 삭제되었습니다.")
+                if st.button(
+                    "종목 삭제",
+                    key=f"delete_holding_{selected_holding_id}",
+                    type="secondary"
+                ):
+                    if delete_holding(selected_holding_id):
+                        st.success(
+                            f"{selected_holding['종목']} 종목이 삭제되었습니다."
+                        )
                         st.rerun()
                     else:
                         st.error("종목 삭제 중 오류가 발생했습니다.")
+            
+            # 원형 차트로 자산 분포 표시
+            st.write("---")
+            st.subheader('자산 분포')
+            
+            valid_data = df[df['시장가치'] > 0].copy()
+            if not valid_data.empty:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                ax.pie(
+                    valid_data['시장가치'],
+                    labels=valid_data['종목'],
+                    autopct='%1.1f%%',
+                    startangle=90
+                )
+                ax.axis('equal')
+                st.pyplot(fig)
+            else:
+                st.warning("표시할 자산 분포 데이터가 없습니다.")
         else:
-            st.info("포트폴리오를 먼저 선택해주세요.")
+            st.info("포트폴리오에 보유 종목이 없습니다.")
     else:
         st.info("포트폴리오를 먼저 선택해주세요.")
 
@@ -615,7 +741,10 @@ def show_portfolio_analysis():
             st.info("유효하지 않은 종목 코드를 제외하고 분석을 진행하려면 다시 '분석 시작' 버튼을 클릭하세요.")
             
             # 유효하지 않은 종목들을 제외
-            valid_symbols = [s for s in symbols if s not in [inv[0] for inv in invalid_symbols]]
+            valid_symbols = [
+                s for s in symbols 
+                if s not in [inv[0] for inv in invalid_symbols]
+            ]
             if not valid_symbols:
                 st.error("유효한 종목이 없습니다. 종목 정보를 수정한 후 다시 시도해주세요.")
                 return
@@ -675,7 +804,28 @@ def show_portfolio_analysis():
             
             # 벤치마크 지수 (S&P 500)
             try:
-                benchmark = yf.download('^GSPC', start=start_date, end=end_date)['Adj Close']
+                # FinanceDataReader로 S&P 500 데이터 가져오기
+                benchmark_df = fdr.DataReader('US500', start_date, end_date)
+                if len(benchmark_df) > 0:
+                    benchmark = benchmark_df['Close']
+                    st.success("FinanceDataReader에서 S&P 500 데이터를 성공적으로 가져왔습니다.")
+                else:
+                    st.warning(
+                        "FinanceDataReader에서 S&P 500 데이터를 가져오는데 "
+                        "실패했습니다. yfinance로 시도합니다."
+                    )
+                    # fdr 실패 시 yfinance로 시도
+                    benchmark = yf.download(
+                        '^GSPC',
+                        start=start_date,
+                        end=end_date,
+                        progress=False
+                    )['Adj Close']
+                
+                if len(benchmark) == 0:
+                    st.error("벤치마크 데이터를 가져오는데 실패했습니다.")
+                    return
+                
                 benchmark_returns = benchmark.pct_change().dropna()
                 benchmark_cumulative = (1 + benchmark_returns).cumprod() - 1
                 
@@ -879,12 +1029,17 @@ def show_portfolio_analysis():
             
             # 롤링 샤프 비율 (60일)
             rolling_return = daily_returns.rolling(window=60).mean() * 252
-            rolling_sharpe = (rolling_return - risk_free_rate * 252) / (daily_returns.rolling(window=60).std() * np.sqrt(252))
+            rolling_sharpe = (
+                (rolling_return - risk_free_rate * 252) / 
+                (daily_returns.rolling(window=60).std() * np.sqrt(252))
+            )
             
             # 그래프 그리기
-            fig = make_subplots(rows=2, cols=1, 
-                              subplot_titles=('롤링 연간 변동성 (%)', '롤링 샤프 비율'),
-                              vertical_spacing=0.10)
+            fig = make_subplots(
+                rows=2, cols=1,
+                subplot_titles=('롤링 연간 변동성 (%)', '롤링 샤프 비율'),
+                vertical_spacing=0.10
+            )
             
             fig.add_trace(
                 go.Scatter(
@@ -1145,14 +1300,14 @@ def show_backtesting():
     st.subheader("📈 포트폴리오 백테스팅")
     
     if not st.session_state.current_portfolio_id:
-        st.info("백테스팅할 포트폴리오를 먼저 선택해주세요. 왼쪽 사이드바에서 포트폴리오를 선택하세요.")
+        st.info("백테스팅할 포트폴리오를 먼저 선택해주세요.")
         return
-        
+    
     # 보유 종목 조회
     holdings = get_portfolio_holdings(st.session_state.current_portfolio_id)
     
     if not holdings:
-        st.info("이 포트폴리오에는 아직 종목이 없습니다. 포트폴리오에 종목을 먼저 추가해주세요.")
+        st.info("이 포트폴리오에는 아직 종목이 없습니다.")
         return
     
     # 백테스팅 기간 및 초기 설정
@@ -1192,6 +1347,7 @@ def show_backtesting():
     selected_strategy = st.selectbox("백테스팅 전략", strategy_options)
     
     # 전략별 추가 파라미터
+    rebalance_period = None
     if selected_strategy == "주기적 리밸런싱":
         rebalance_options = ["월간", "분기별", "반기별", "연간"]
         rebalance_period = st.selectbox("리밸런싱 주기", rebalance_options)
@@ -1202,52 +1358,39 @@ def show_backtesting():
             "반기별": '6M',
             "연간": 'Y'
         }
+        rebalance_freq = rebalance_map[rebalance_period]
     
     # 백테스팅 실행 버튼
     if st.button("백테스팅 실행"):
-        # 종목 코드 검증
         symbols = [h['symbol'] for h in holdings]
-        invalid_symbols = []
-        
-        for symbol in symbols:
-            valid, error_msg = validate_ticker(symbol)
-            if not valid:
-                invalid_symbols.append((symbol, error_msg))
-        
-        if invalid_symbols:
-            st.error("일부 종목 코드가 유효하지 않습니다:")
-            for symbol, error_msg in invalid_symbols:
-                st.warning(f"• {symbol}: {error_msg}")
-            
-            st.info("유효하지 않은 종목 코드를 제외하고 백테스팅을 진행하려면 다시 '백테스팅 실행' 버튼을 클릭하세요.")
-            
-            # 유효하지 않은 종목들을 제외
-            valid_symbols = [s for s in symbols if s not in [inv[0] for inv in invalid_symbols]]
-            if not valid_symbols:
-                st.error("유효한 종목이 없습니다. 종목 정보를 수정한 후 다시 시도해주세요.")
-                return
-            
-            symbols = valid_symbols
-            # 유효한 종목에 해당하는 holdings만 필터링
-            holdings = [h for h in holdings if h['symbol'] in symbols]
-        
         quantities = [h['quantity'] for h in holdings]
         
-        with st.spinner("백테스팅을 수행 중입니다..."):
-            # 히스토리컬 데이터 가져오기
+        # 종목 검증 및 데이터 가져오기
+        with st.spinner("데이터를 가져오는 중입니다..."):
             hist_data = fetch_historical_data(symbols, start_date, end_date)
             
-            if hist_data.empty:
+            if not hist_data.empty:
+                # 포트폴리오 가치 계산
+                portfolio_value = initial_capital
+                current_quantities = quantities.copy()
+                
+                # 리밸런싱 날짜 계산
+                if selected_strategy == "주기적 리밸런싱":
+                    rebalance_dates = pd.date_range(
+                        start=start_date,
+                        end=end_date,
+                        freq=rebalance_freq
+                    )
+                
+                # 여기에 실제 백테스팅 로직 구현
+                st.info("백테스팅 기능이 개발 중입니다...")
+            else:
                 st.error("히스토리컬 데이터를 가져오는데 실패했습니다. 다음을 확인해보세요:")
                 st.error("1. 인터넷 연결이 안정적인지 확인하세요.")
                 st.error("2. 종목 코드가 정확한지 확인하세요 (예: 미국 주식 'AAPL', 한국 주식 '005930.KS').")
                 st.error("3. 백테스팅 기간을 더 짧게 설정해보세요.")
                 st.error("4. 나중에 다시 시도해보세요. (Yahoo Finance API 일시적 제한일 수 있습니다)")
                 return
-            
-            # 데이터 가져오기 성공, 백테스팅 진행
-            # ... (나머지 백테스팅 코드는 유지) ...
-            # ...
 
 # 데이터 유효성 검증 함수 강화
 def validate_ticker(ticker):
@@ -1260,16 +1403,19 @@ def validate_ticker(ticker):
         ticker_obj = yf.Ticker(ticker)
         
         # 한국 주식의 경우 접미사 확인
-        if not (ticker.endswith('.KS') or ticker.endswith('.KQ')) and len(ticker) in [6, 7] and ticker.isdigit():
+        if not (
+            ticker.endswith('.KS') or 
+            ticker.endswith('.KQ')
+        ) and len(ticker) in [6, 7] and ticker.isdigit():
             # 한국 주식 코드인 경우 접미사 추가 시도
             for suffix in ['.KS', '.KQ']:
                 try:
                     test_ticker = yf.Ticker(f"{ticker}{suffix}")
                     test_data = test_ticker.history(period='1d')
-                    if not test_data.empty:
-                        return True, f"올바른 종목 코드로 변환되었습니다: {ticker}{suffix}"
-                except Exception as e:
-                    # 특정 접미사로 시도 실패, 다음 접미사 시도
+                    if len(test_data) > 0:  # empty 대신 len() 사용
+                        ticker = f"{ticker}{suffix}"
+                        break
+                except (ConnectionError, TimeoutError, Exception):
                     continue
         
         # 일반적인 검증 진행
@@ -1287,7 +1433,7 @@ def validate_ticker(ticker):
             
             # 히스토리 데이터로 확인
             test_data = ticker_obj.history(period='1d')
-            if not test_data.empty:
+            if len(test_data) > 0:  # empty 대신 len() 사용
                 return True, None
                 
             return False, "종목 정보를 찾을 수 없습니다."
@@ -1296,7 +1442,7 @@ def validate_ticker(ticker):
             # info 가져오기 실패, 히스토리로 시도
             try:
                 test_data = ticker_obj.history(period='1d')
-                if not test_data.empty:
+                if len(test_data) > 0:  # empty 대신 len() 사용
                     return True, None
             except Exception as inner_e:
                 return False, f"종목 데이터를 가져올 수 없습니다: {str(inner_e)}"
@@ -1401,21 +1547,10 @@ def render_portfolio_content():
                     st.success('투자가 성공적으로 추가되었습니다!')
     
     # 메인 콘텐츠
-    tabs = st.tabs(["포트폴리오 관리", "포트폴리오 분석", "백테스팅"])
-    
-    # 포트폴리오 관리 탭
-    with tabs[0]:
-        show_portfolio_management()
-        if st.session_state.current_portfolio_id:
-            show_portfolio_holdings()
-    
-    # 포트폴리오 분석 탭
-    with tabs[1]:
-        show_portfolio_analysis()
-    
-    # 백테스팅 탭
-    with tabs[2]:
-        show_backtesting()
+    # 포트폴리오 관리 탭만 표시
+    show_portfolio_management()
+    if st.session_state.current_portfolio_id:
+        show_portfolio_holdings()
 
 # 메인 앱 - 독립 실행 시 호출
 def main():
