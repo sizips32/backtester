@@ -573,121 +573,129 @@ def show_portfolio_holdings():
             # 포트폴리오 가치 합계 표시
             st.metric("포트폴리오 총 가치", f"${total_value:,.2f}")
             
-            # 종목 수정/삭제 섹션
-            st.write("---")
-            st.subheader("보유 종목 수정")
+            # 종목 관리 섹션
+            st.markdown("---")
+            st.subheader("📋 종목 관리")
             
-            # 종목 선택
-            selected_holding_id = st.selectbox(
-                "수정할 종목 선택",
-                options=[h['ID'] for h in holdings_data],
-                format_func=lambda x: next(
-                    h['종목'] for h in holdings_data if h['ID'] == x
-                )
-            )
+            col1, col2 = st.columns(2)
             
-            if selected_holding_id:
-                selected_holding = next(
-                    h for h in holdings_data if h['ID'] == selected_holding_id
-                )
-                
-                with st.form("edit_holding_form"):
-                    st.write(f"#### {selected_holding['종목']} 수정")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        quantity = st.number_input(
-                            "보유수량",
-                            min_value=0.0,
-                            value=float(selected_holding['보유수량']),
-                            step=0.01
-                        )
-                        
-                        purchase_price = st.number_input(
-                            "매수가",
-                            min_value=0.0,
-                            value=float(selected_holding['매수가']),
-                            step=0.01
-                        )
-                    
-                    with col2:
-                        purchase_date = st.date_input(
-                            "매수일",
-                            value=datetime.strptime(
-                                selected_holding['매수일'], 
-                                '%Y-%m-%d'
-                            ) if selected_holding['매수일'] != '정보 없음' 
-                            else datetime.now()
-                        )
-                        
-                        asset_type = st.selectbox(
-                            "자산 유형",
-                            options=['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity'],
-                            index=['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity'].index(
-                                selected_holding['자산유형']
-                            )
-                        )
-                    
-                    col1, col2, col3 = st.columns([1, 1, 1])
-                    with col2:
-                        submitted = st.form_submit_button(
-                            "변경사항 저장",
-                            use_container_width=True,
-                            type="primary"
-                        )
+            # 종목 추가
+            with col1:
+                st.markdown("#### ➕ 종목 추가")
+                with st.form("add_investment_form"):
+                    symbol = st.text_input('종목 코드 (예: AAPL, 005930.KS)', key='main_symbol')
+                    quantity = st.number_input('수량', min_value=0.0, key='main_quantity')
+                    purchase_price = st.number_input('매수가', min_value=0.0, key='main_price')
+                    purchase_date = st.date_input('매수일', value=datetime.now(), key='main_date')
+                    asset_type = st.selectbox(
+                        '자산 유형',
+                        ['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity'],
+                        key='main_asset_type'
+                    )
+                    submitted = st.form_submit_button('종목 추가', use_container_width=True)
                     
                     if submitted:
-                        if edit_investment(
-                            selected_holding_id,
+                        if add_investment(
+                            st.session_state.current_portfolio_id,
+                            symbol,
                             quantity,
                             purchase_price,
                             purchase_date.strftime('%Y-%m-%d'),
                             asset_type
                         ):
-                            st.success("종목이 성공적으로 수정되었습니다.")
+                            st.success('종목이 성공적으로 추가되었습니다!')
                             st.rerun()
-                
-                # 종목 삭제 섹션
-                st.write("---")
-                st.write("#### 종목 삭제")
-                st.warning(
-                    "⚠️ 주의: 종목을 삭제하면 관련된 모든 정보가 영구적으로 삭제됩니다."
-                )
-                
-                if st.button(
-                    "종목 삭제",
-                    key=f"delete_holding_{selected_holding_id}",
-                    type="secondary"
-                ):
-                    if delete_holding(selected_holding_id):
-                        st.success(
-                            f"{selected_holding['종목']} 종목이 삭제되었습니다."
+            
+            # 종목 수정
+            with col2:
+                st.markdown("#### ✏️ 종목 수정")
+                holdings = get_portfolio_holdings(st.session_state.current_portfolio_id)
+                if holdings:
+                    with st.form("edit_investment_form"):
+                        # 수정할 종목 선택
+                        holdings_dict = {
+                            h['id']: f"{h['symbol']} ({h['quantity']}주, ${h['purchase_price']:.2f})" 
+                            for h in holdings
+                        }
+                        selected_holding_id = st.selectbox(
+                            "수정할 종목 선택",
+                            options=list(holdings_dict.keys()),
+                            format_func=lambda x: holdings_dict[x],
+                            key='edit_holding_select'
                         )
-                        st.rerun()
-                    else:
-                        st.error("종목 삭제 중 오류가 발생했습니다.")
+                        
+                        # 선택된 종목 정보 가져오기
+                        selected_holding = next(
+                            (h for h in holdings if h['id'] == selected_holding_id), 
+                            None
+                        )
+                        
+                        if selected_holding:
+                            quantity = st.number_input(
+                                '수량',
+                                min_value=0.0,
+                                value=float(selected_holding['quantity']),
+                                key='edit_quantity'
+                            )
+                            purchase_price = st.number_input(
+                                '매수가',
+                                min_value=0.0,
+                                value=float(selected_holding['purchase_price']),
+                                key='edit_price'
+                            )
+                            purchase_date = st.date_input(
+                                '매수일',
+                                value=datetime.strptime(
+                                    selected_holding['purchase_date'], 
+                                    '%Y-%m-%d'
+                                ) if selected_holding['purchase_date'] else datetime.now(),
+                                key='edit_date'
+                            )
+                            asset_type = st.selectbox(
+                                '자산 유형',
+                                ['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity'],
+                                index=['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity'].index(
+                                    selected_holding['asset_type']
+                                ),
+                                key='edit_asset_type'
+                            )
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                submitted = st.form_submit_button(
+                                    '종목 수정',
+                                    use_container_width=True,
+                                    type='primary'
+                                )
+                            with col2:
+                                delete = st.form_submit_button(
+                                    '종목 삭제',
+                                    use_container_width=True,
+                                    type='secondary'
+                                )
+                            
+                            if submitted:
+                                if edit_investment(
+                                    selected_holding_id,
+                                    quantity,
+                                    purchase_price,
+                                    purchase_date.strftime('%Y-%m-%d'),
+                                    asset_type
+                                ):
+                                    st.success('종목이 성공적으로 수정되었습니다!')
+                                    st.rerun()
+                            
+                            if delete:
+                                if delete_holding(selected_holding_id):
+                                    st.success('종목이 성공적으로 삭제되었습니다!')
+                                    st.rerun()
+                else:
+                    st.info("수정할 종목이 없습니다. 먼저 종목을 추가해주세요.")
             
-            # 원형 차트로 자산 분포 표시
-            st.write("---")
-            st.subheader('자산 분포')
-            
-            valid_data = df[df['시장가치'] > 0].copy()
-            if not valid_data.empty:
-                fig, ax = plt.subplots(figsize=(10, 6))
-                ax.pie(
-                    valid_data['시장가치'],
-                    labels=valid_data['종목'],
-                    autopct='%1.1f%%',
-                    startangle=90
-                )
-                ax.axis('equal')
-                st.pyplot(fig)
-            else:
-                st.warning("표시할 자산 분포 데이터가 없습니다.")
+            # 구분선
+            st.markdown("---")
         else:
-            st.info("포트폴리오에 보유 종목이 없습니다.")
-    else:
-        st.info("포트폴리오를 먼저 선택해주세요.")
+            st.info("편집할 포트폴리오를 선택해주세요.")
 
 # 포트폴리오 분석 화면
 def show_portfolio_analysis():
@@ -1499,43 +1507,48 @@ def render_portfolio_content():
         if selected_portfolio != st.session_state.current_portfolio_id:
             st.session_state.current_portfolio_id = selected_portfolio
             st.rerun()
-            
-            # 포트폴리오 세부 정보 표시
-            if selected_portfolio:
-                portfolio = get_portfolio_by_id(selected_portfolio)
-                if portfolio:
-                    st.markdown(f"### {portfolio['name']}")
-                    st.write(f"설명: {portfolio['description']}")
-                    st.write(f"생성일: {portfolio['created_at']}")
-                    
-                    # 포트폴리오 삭제 버튼
-                    if st.button("포트폴리오 삭제", key="delete_portfolio"):
-                        if delete_portfolio(selected_portfolio):
-                            st.session_state.current_portfolio_id = None
-                            refresh_portfolios()
-                            st.success("포트폴리오가 삭제되었습니다.")
-                            st.rerun()
-                        else:
-                            st.error("포트폴리오 삭제 중 오류가 발생했습니다.")
     else:
         st.sidebar.info("포트폴리오를 생성해주세요.")
     
-    # 투자 추가 UI (선택된 포트폴리오가 있을 때만)
-    if st.session_state.current_portfolio_id:
-        st.sidebar.markdown("---")
-        st.sidebar.subheader('투자 추가')
-        with st.sidebar.form("investment_form"):
-            symbol = st.text_input('종목 이름 (예: AAPL)')
-            quantity = st.number_input('수량', min_value=0.0)
-            purchase_price = st.number_input('매수가', min_value=0.0)
-            purchase_date = st.date_input('매수일', value=datetime.now())
-            asset_type = st.selectbox(
-                '자산 유형',
-                ['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity']
-            )
-            submitted = st.form_submit_button('추가')
+    # 포트폴리오 생성 UI
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("<h3>새 포트폴리오 생성</h3>", unsafe_allow_html=True)
+    with st.sidebar.form("create_portfolio_sidebar_form"):
+        name = st.text_input("포트폴리오 이름")
+        description = st.text_area("설명 (선택사항)", height=100)
+        submitted = st.form_submit_button("포트폴리오 생성", use_container_width=True)
+        
+        if submitted:
+            if not name:
+                st.sidebar.error("포트폴리오 이름을 입력해주세요.")
+            else:
+                new_portfolio_id = create_portfolio(name, description)
+                if new_portfolio_id:
+                    refresh_portfolios()
+                    st.session_state.current_portfolio_id = new_portfolio_id
+                    st.sidebar.success(f"'{name}' 포트폴리오가 생성되었습니다.")
+                    st.rerun()
+                else:
+                    st.sidebar.error("포트폴리오 생성 중 오류가 발생했습니다.")
+    
+    # 신규 포트폴리오 종목 추가 UI
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("<h3>신규 포트폴리오 종목 추가</h3>", unsafe_allow_html=True)
+    with st.sidebar.form("add_new_investment_form"):
+        symbol = st.text_input('종목 코드 (예: AAPL, 005930.KS)')
+        quantity = st.number_input('수량', min_value=0.0)
+        purchase_price = st.number_input('매수가', min_value=0.0)
+        purchase_date = st.date_input('매수일', value=datetime.now())
+        asset_type = st.selectbox(
+            '자산 유형',
+            ['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity']
+        )
+        submitted = st.form_submit_button('종목 추가', use_container_width=True)
 
-            if submitted:
+        if submitted:
+            if not st.session_state.current_portfolio_id:
+                st.sidebar.error("먼저 포트폴리오를 선택해주세요.")
+            else:
                 if add_investment(
                     st.session_state.current_portfolio_id,
                     symbol,
@@ -1544,13 +1557,32 @@ def render_portfolio_content():
                     purchase_date.strftime('%Y-%m-%d'),
                     asset_type
                 ):
-                    st.success('투자가 성공적으로 추가되었습니다!')
+                    st.sidebar.success('종목이 성공적으로 추가되었습니다!')
+                    st.rerun()
     
     # 메인 콘텐츠
-    # 포트폴리오 관리 탭만 표시
-    show_portfolio_management()
     if st.session_state.current_portfolio_id:
-        show_portfolio_holdings()
+        # 선택된 포트폴리오의 전체 정보 표시
+        portfolio = get_portfolio_by_id(st.session_state.current_portfolio_id)
+        if portfolio:
+            # 포트폴리오 기본 정보 섹션
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.header(f"📊 {portfolio['name']}")
+                st.write(f"**설명:** {portfolio['description']}")
+            with col2:
+                st.write("")  # 간격 조정
+                st.write("")  # 간격 조정
+                st.info(f"생성일: {portfolio['created_at']}\n마지막 수정일: {portfolio['updated_at']}")
+            
+            # 보유 종목 및 포트폴리오 가치 섹션
+            st.subheader("📈 보유 종목 현황")
+            show_portfolio_holdings()
+            
+            # 구분선
+            st.markdown("---")
+        else:
+            st.info("편집할 포트폴리오를 선택해주세요.")
 
 # 메인 앱 - 독립 실행 시 호출
 def main():
