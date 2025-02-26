@@ -473,6 +473,23 @@ def show_portfolio_holdings():
         holdings = get_portfolio_holdings(st.session_state.current_portfolio_id)
         
         if holdings:
+            # 티커 목록 추출 및 표시
+            tickers = [holding['symbol'] for holding in holdings]
+            ticker_string = ", ".join(tickers)
+            
+            st.subheader("티커 목록")
+            ticker_col1, ticker_col2 = st.columns([4, 1])
+            
+            with ticker_col1:
+                st.code(ticker_string, language=None)
+            
+            with ticker_col2:
+                if st.button("복사", key="copy_tickers_button", use_container_width=True):
+                    st.session_state.clipboard = ticker_string
+                    st.toast("티커 목록이 클립보드에 복사되었습니다! (Ctrl+V로 붙여넣기 가능)")
+            
+            st.markdown("---")
+            
             # 실시간 가격 업데이트
             holdings_data = []
             total_value = 0
@@ -570,8 +587,85 @@ def show_portfolio_holdings():
             # 데이터프레임 표시
             st.dataframe(display_df, use_container_width=True)
             
-            # 포트폴리오 가치 합계 표시
-            st.metric("포트폴리오 총 가치", f"${total_value:,.2f}")
+            # 포트폴리오 현황 정보 표시
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # 포트폴리오 총 가치
+                st.metric("포트폴리오 총 가치", f"${total_value:,.2f}")
+                
+                # 순자산가치(NAV) 계산 및 표시
+                total_shares = sum([holding['quantity'] for holding in holdings])
+                nav = total_value / total_shares if total_shares > 0 else 0
+                st.metric("NAV (순자산가치)", f"${nav:,.2f}")
+                
+                # 자산유형별 비중 계산
+                asset_types = {}
+                for item in holdings_data:
+                    asset_type = item['자산유형']
+                    market_value = item['시장가치']
+                    if asset_type in asset_types:
+                        asset_types[asset_type] += market_value
+                    else:
+                        asset_types[asset_type] = market_value
+                
+                # 자산유형별 비중 표시
+                st.subheader("자산유형별 비중")
+                asset_type_df = pd.DataFrame({
+                    '자산유형': list(asset_types.keys()),
+                    '시장가치': list(asset_types.values()),
+                    '비중(%)': [value/total_value*100 for value in asset_types.values()] if total_value > 0 else [0] * len(asset_types)
+                })
+                
+                # 자산유형별 비중 테이블 표시
+                asset_type_df['시장가치'] = asset_type_df['시장가치'].map('${:,.2f}'.format)
+                asset_type_df['비중(%)'] = asset_type_df['비중(%)'].map('{:,.2f}%'.format)
+                st.dataframe(asset_type_df, use_container_width=True)
+            
+            with col2:
+                # 포트폴리오 수익률 정보
+                total_investment = sum([holding['quantity'] * holding['purchase_price'] for holding in holdings])
+                total_gain_loss = total_value - total_investment
+                total_gain_loss_pct = (total_gain_loss / total_investment) * 100 if total_investment > 0 else 0
+                
+                # 총 수익/손실 표시
+                st.metric(
+                    "총 수익/손실", 
+                    f"${total_gain_loss:,.2f}", 
+                    f"{total_gain_loss_pct:,.2f}%",
+                    delta_color="normal" if total_gain_loss >= 0 else "inverse"
+                )
+                
+                # 포트폴리오 요약 정보
+                st.subheader("포트폴리오 요약")
+                summary_data = {
+                    "총 투자액": f"${total_investment:,.2f}",
+                    "총 종목 수": len(holdings),
+                    "평균 종목 비중": f"{100/len(holdings):,.2f}%" if holdings else "0%",
+                    "최대 비중 종목": df.loc[df['시장가치'].idxmax(), '종목'] if not df.empty else "없음",
+                    "최대 수익 종목": df.loc[df['손익(%)'].idxmax(), '종목'] if not df.empty else "없음",
+                    "최대 손실 종목": df.loc[df['손익(%)'].idxmin(), '종목'] if not df.empty else "없음"
+                }
+                
+                summary_df = pd.DataFrame({
+                    '항목': list(summary_data.keys()),
+                    '값': list(summary_data.values())
+                })
+                
+                st.dataframe(summary_df, use_container_width=True, hide_index=True)
+            
+            # 포트폴리오 현황 시각화 - 비중 파이 차트
+            if len(holdings_data) > 0:
+                st.subheader("포트폴리오 비중 분포")
+                fig = go.Figure(data=[go.Pie(
+                    labels=df['종목'],
+                    values=df['시장가치'],
+                    hole=.3,
+                    textinfo='label+percent',
+                    marker_colors=px.colors.qualitative.Pastel
+                )])
+                fig.update_layout(height=500)
+                st.plotly_chart(fig, use_container_width=True)
             
             # 종목 관리 섹션
             st.markdown("---")
@@ -694,6 +788,98 @@ def show_portfolio_holdings():
             
             # 구분선
             st.markdown("---")
+            
+            # 포트폴리오 수정 섹션 추가
+            st.subheader("📝 포트폴리오 수정")
+            
+            # 현재 선택된 포트폴리오 정보 가져오기
+            current_portfolio = get_portfolio_by_id(st.session_state.current_portfolio_id)
+            
+            if current_portfolio:
+                with st.expander("포트폴리오 정보 수정", expanded=True):
+                    # 수정 폼
+                    with st.form("edit_current_portfolio_form"):
+                        col1, col2 = st.columns([3, 1])
+                        
+                        with col1:
+                            st.write(f"**현재 포트폴리오**: {current_portfolio['name']}")
+                        
+                        with col2:
+                            st.write(f"생성일: {current_portfolio['created_at']}")
+                        
+                        # 포트폴리오 이름 및 설명 입력 필드
+                        new_name = st.text_input(
+                            "포트폴리오 이름",
+                            value=current_portfolio['name'],
+                            key="edit_current_portfolio_name"
+                        )
+                        
+                        new_description = st.text_area(
+                            "포트폴리오 설명",
+                            value=current_portfolio['description'] or "",
+                            key="edit_current_portfolio_desc"
+                        )
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            submit_button = st.form_submit_button(
+                                "변경사항 저장",
+                                use_container_width=True,
+                                type="primary"
+                            )
+                        
+                        with col2:
+                            delete_button = st.form_submit_button(
+                                "포트폴리오 삭제",
+                                use_container_width=True,
+                                type="secondary"
+                            )
+                    
+                    # 폼 제출 후 처리
+                    if submit_button:
+                        if not new_name:
+                            st.error("포트폴리오 이름을 입력해주세요.")
+                        elif new_name == current_portfolio['name'] and new_description == current_portfolio['description']:
+                            st.warning("변경된 내용이 없습니다.")
+                        else:
+                            try:
+                                if update_portfolio(
+                                    current_portfolio['id'],
+                                    new_name,
+                                    new_description
+                                ):
+                                    refresh_portfolios()
+                                    st.success(
+                                        f"포트폴리오가 '{new_name}'(으)로 업데이트되었습니다."
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.error("포트폴리오 업데이트 중 오류가 발생했습니다.")
+                            except Exception as e:
+                                st.error(f"포트폴리오 업데이트 중 오류 발생: {str(e)}")
+                    
+                    # 삭제 버튼 처리
+                    if delete_button:
+                        # 삭제 확인을 위한 추가 UI
+                        st.warning("⚠️ 정말로 이 포트폴리오를 삭제하시겠습니까? 모든 보유 종목 정보가 함께 삭제됩니다.")
+                        
+                        confirm_col1, confirm_col2 = st.columns(2)
+                        
+                        with confirm_col1:
+                            if st.button("예, 삭제합니다", key="confirm_delete_portfolio", type="primary"):
+                                if delete_portfolio(current_portfolio['id']):
+                                    st.session_state.current_portfolio_id = None
+                                    refresh_portfolios()
+                                    st.success(f"'{current_portfolio['name']}' 포트폴리오가 삭제되었습니다.")
+                                    st.rerun()
+                                else:
+                                    st.error("포트폴리오 삭제 중 오류가 발생했습니다.")
+                        
+                        with confirm_col2:
+                            if st.button("아니오, 취소합니다", key="cancel_delete_portfolio"):
+                                st.info("삭제가 취소되었습니다.")
+                                st.rerun()
         else:
             st.info("편집할 포트폴리오를 선택해주세요.")
 
