@@ -617,6 +617,9 @@ def show_portfolio_holdings():
                     '비중(%)': [value/total_value*100 for value in asset_types.values()] if total_value > 0 else [0] * len(asset_types)
                 })
                 
+                # 모든 컬럼이 문자열 타입인지 확인하여 PyArrow 변환 오류 방지
+                asset_type_df['자산유형'] = asset_type_df['자산유형'].astype(str)
+                
                 # 자산유형별 비중 테이블 표시
                 asset_type_df['시장가치'] = asset_type_df['시장가치'].map('${:,.2f}'.format)
                 asset_type_df['비중(%)'] = asset_type_df['비중(%)'].map('{:,.2f}%'.format)
@@ -640,7 +643,7 @@ def show_portfolio_holdings():
                 st.subheader("포트폴리오 요약")
                 summary_data = {
                     "총 투자액": f"${total_investment:,.2f}",
-                    "총 종목 수": len(holdings),
+                    "총 종목 수": str(len(holdings)),
                     "평균 종목 비중": f"{100/len(holdings):,.2f}%" if holdings else "0%",
                     "최대 비중 종목": df.loc[df['시장가치'].idxmax(), '종목'] if not df.empty else "없음",
                     "최대 수익 종목": df.loc[df['손익(%)'].idxmax(), '종목'] if not df.empty else "없음",
@@ -1378,6 +1381,10 @@ def show_portfolio_analysis():
                     '자산 유형': asset_types,
                     '비중(%)': [w * 100 for w in weights]
                 })
+                
+                # 모든 컬럼이 사용 가능한 타입인지 확인하여 PyArrow 변환 오류 방지
+                pca_df['종목'] = pca_df['종목'].astype(str)
+                pca_df['자산 유형'] = pca_df['자산 유형'].astype(str)
                 
                 # PCA 산점도
                 fig = px.scatter(

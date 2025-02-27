@@ -41,6 +41,10 @@
 ├── risk_analysis.py          # 리스크 분석 도구
 ├── portfolio_rebalancing.py  # 리밸런싱 로직
 ├── position_sizing.py        # 포지션 사이징 전략
+├── run.py                    # 커스텀 포트로 앱 실행 스크립트
+├── run.sh                    # 쉘 스크립트로 앱 실행
+├── .streamlit/               # Streamlit 설정 폴더
+│   └── config.toml           # Streamlit 설정 파일
 └── requirements.txt          # 프로젝트 의존성
 ```
 
@@ -85,12 +89,20 @@ cp .env.example .env  # 환경 변수 템플릿 복사
 5. 애플리케이션 실행
 
 ```bash
+# 기본 방법 (포트 8501 사용)
 streamlit run app.py
+
+# 커스텀 포트(7700) 지정 실행
+streamlit run app.py --server.port=7700
+
+# 또는 제공된 실행 스크립트 사용
+python run.py   # Python 스크립트 방식
+./run.sh        # Shell 스크립트 방식 (chmod +x run.sh로 권한 부여 필요)
 ```
 
 ## 사용 방법
 
-1. 웹 브라우저에서 `http://localhost:8501` 접속
+1. 웹 브라우저에서 `http://localhost:7700` 접속 (기본 설정된 포트 사용)
 2. 분석하고자 하는 자산 목록 입력
 3. 백테스팅 기간 및 전략 설정
 4. 분석 실행 및 결과 확인

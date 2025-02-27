@@ -16,6 +16,7 @@ MENU_OPTIONS = {
     "📈 백테스팅": show_backtesting
 }
 
+
 def main():
     st.set_page_config(
         page_title="포트폴리오 자금 관리",
@@ -47,6 +48,7 @@ def main():
     )
     
     MENU_OPTIONS[menu]()
+
 
 if __name__ == "__main__":
     main() 
