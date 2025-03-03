@@ -87,6 +87,92 @@ def show_risk_analysis():
                 "5년": 1825
             }
 
+            # 기간 설정
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=period_days[period])
+
+            # 벤치마크 지수 데이터 가져오기
+            try:
+                st.subheader("벤치마크 지수 성과")
+                benchmark_tickers = {
+                    "S&P500": "^GSPC",
+                    "KOSPI": "^KS11",
+                    "상해종합": "000001.SS",
+                    "Nikkei225": "^N225"
+                }
+                
+                benchmark_data = pd.DataFrame()
+                for name, ticker in benchmark_tickers.items():
+                    stock = yf.download(ticker, start=start_date, end=end_date)
+                    if len(stock) > 0:
+                        benchmark_data[name] = stock['Close']
+                
+                if not benchmark_data.empty:
+                    # 누적수익률 계산
+                    benchmark_returns = benchmark_data.pct_change()
+                    benchmark_cum_returns = (1 + benchmark_returns).cumprod() - 1
+                    
+                    # 그래프 생성
+                    fig_benchmark = go.Figure()
+                    colors = {
+                        "S&P500": "#00ffff",  # 하늘색
+                        "KOSPI": "#ff9900",   # 주황색
+                        "상해종합": "#00ff00", # 연두색
+                        "Nikkei225": "#ff3333" # 빨간색
+                    }
+                    
+                    for name in benchmark_data.columns:
+                        fig_benchmark.add_trace(go.Scatter(
+                            x=benchmark_cum_returns.index,
+                            y=benchmark_cum_returns[name],
+                            mode='lines',
+                            name=name,
+                            line=dict(color=colors.get(name, "#ffffff"), width=1.5)
+                        ))
+                    
+                    fig_benchmark.update_layout(
+                        height=250,  # 높이 줄임
+                        margin=dict(l=5, r=5, t=25, b=25),  # 여백 줄임
+                        title=dict(
+                            text="벤치마크 지수 누적수익률",
+                            x=0.5,
+                            y=0.95,
+                            xanchor='center',
+                            yanchor='top',
+                            font=dict(size=14, color='white')
+                        ),
+                        xaxis=dict(
+                            showgrid=True,
+                            gridcolor='rgba(128, 128, 128, 0.2)',
+                            tickfont=dict(color='white')
+                        ),
+                        yaxis=dict(
+                            showgrid=True,
+                            gridcolor='rgba(128, 128, 128, 0.2)',
+                            tickfont=dict(color='white'),
+                            tickformat='.1%'
+                        ),
+                        yaxis_tickformat='.1%',
+                        hovermode='x unified',
+                        legend=dict(
+                            orientation="h",
+                            yanchor="top",
+                            y=-0.15,
+                            xanchor="center",
+                            x=0.5,
+                            bgcolor="rgba(0, 0, 0, 0.5)",
+                            font=dict(size=10, color='white'),
+                            bordercolor='rgba(128, 128, 128, 0.2)'
+                        ),
+                        plot_bgcolor='black',
+                        paper_bgcolor='black'
+                    )
+                    st.plotly_chart(fig_benchmark, use_container_width=True)
+                else:
+                    st.warning("벤치마크 지수 데이터를 가져올 수 없습니다.")
+            except Exception as e:
+                st.error(f"벤치마크 지수 처리 중 오류 발생: {str(e)}")
+
         # 티커 입력 받기
         ticker_input = st.text_input(
             "분석할 종목 코드를 입력하세요 (여러 종목은 쉼표로 구분, 예: 005930.KS,035720.KS)",
@@ -99,10 +185,6 @@ def show_risk_analysis():
         if not tickers:
             st.warning("종목 코드를 입력해주세요.")
             return
-        
-        # 기간 설정
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=period_days[period])
         
         # 데이터 가져오기
         data = pd.DataFrame()
