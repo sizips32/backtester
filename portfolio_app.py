@@ -1085,7 +1085,7 @@ def show_portfolio_analysis():
             st.write("### 월별 수익률 (%)")
             
             # 날짜 인덱스를 기준으로 월별 수익률 계산
-            monthly_returns = daily_returns.groupby(pd.Grouper(freq='M')).apply(
+            monthly_returns = daily_returns.groupby(pd.Grouper(freq='ME')).apply(
                 lambda x: (1 + x).prod() - 1
             ) * 100
             
@@ -1554,9 +1554,9 @@ def show_backtesting():
         rebalance_period = st.selectbox("리밸런싱 주기", rebalance_options)
         
         rebalance_map = {
-            "월간": 'M',
+            "월간": 'ME',
             "분기별": 'Q',
-            "반기별": '6M',
+            "반기별": '6ME',
             "연간": 'Y'
         }
         rebalance_freq = rebalance_map[rebalance_period]

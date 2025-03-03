@@ -57,37 +57,12 @@ def calculate_sortino_ratio(returns, risk_free_rate=0.02):
         returns = returns.dropna()
         if len(returns) < 2:
             return 0
-        excess_returns = returns - risk_free_rate/252
+        excess_returns = returns.mean() * 252 - risk_free_rate
         downside_returns = returns[returns < 0]
         downside_std = downside_returns.std()
         return np.sqrt(252) * excess_returns.mean() / downside_std if downside_std != 0 else 0
     except Exception as e:
         st.error(f"Sortino Ratio 계산 중 오류 발생: {str(e)}")
-        return 0
-
-def calculate_beta(returns, market_returns):
-    try:
-        # Series가 아닌 경우 Series로 변환
-        if isinstance(returns, pd.DataFrame):
-            returns = returns.iloc[:, 0]
-        if isinstance(market_returns, pd.DataFrame):
-            market_returns = market_returns.iloc[:, 0]
-            
-        # 두 시리즈의 인덱스를 맞춤
-        aligned_returns = pd.DataFrame({
-            'stock': returns.squeeze() if hasattr(returns, 'squeeze') else returns,
-            'market': market_returns.squeeze() if hasattr(market_returns, 'squeeze') else market_returns
-        }).dropna()
-        
-        if len(aligned_returns) < 2:  # 데이터가 충분하지 않은 경우
-            return 0
-        
-        covariance = np.cov(aligned_returns['stock'], aligned_returns['market'])[0][1]
-        market_variance = np.var(aligned_returns['market'])
-        return covariance / market_variance if market_variance != 0 else 0
-        
-    except Exception as e:
-        st.error(f"Beta 계산 중 오류 발생: {str(e)}")
         return 0
 
 def show_risk_analysis():
@@ -111,18 +86,6 @@ def show_risk_analysis():
                 "3년": 1095,
                 "5년": 1825
             }
-            
-            st.subheader("베타 계산 설정")
-            market_index = st.selectbox(
-                "기준 시장 지수 선택",
-                ["KOSPI", "S&P 500"],
-                index=0
-            )
-            
-            market_ticker = {
-                "KOSPI": "^KS11",
-                "S&P 500": "^GSPC"
-            }
 
         # 티커 입력 받기
         ticker_input = st.text_input(
@@ -143,25 +106,13 @@ def show_risk_analysis():
         
         # 데이터 가져오기
         data = pd.DataFrame()
-        market_data = pd.DataFrame()
         failed_tickers = []
-        
-        # 시장 데이터 가져오기
-        try:
-            market_data = yf.download(market_ticker[market_index], start=start_date, end=end_date)
-            if market_data.empty:
-                st.error(f"{market_index} 데이터를 가져오지 못했습니다.")
-                return
-            market_returns = market_data['Close'].pct_change()
-        except Exception as e:
-            st.error(f"시장 지수 데이터 로드 중 오류 발생: {str(e)}")
-            return
         
         # 종목 데이터 가져오기
         for ticker in tickers:
             try:
                 stock = yf.download(ticker, start=start_date, end=end_date)
-                if stock.empty or 'Close' not in stock.columns:
+                if len(stock) == 0 or 'Close' not in stock.columns:
                     failed_tickers.append(ticker)
                     continue
                 data[ticker] = stock['Close']
@@ -189,7 +140,7 @@ def show_risk_analysis():
                 st.subheader(f"{ticker} 리스크 분석")
                 
                 # 데이터 유효성 검사
-                if returns[ticker].empty or len(returns[ticker].dropna()) < 2:
+                if len(returns[ticker].dropna()) < 2:
                     st.warning(f"{ticker}의 유효한 데이터가 충분하지 않습니다.")
                     continue
                 
@@ -200,8 +151,7 @@ def show_risk_analysis():
                     cvar_95 = calculate_cvar(returns[ticker], 0.95)
                     sharpe = calculate_sharpe_ratio(returns[ticker])
                     sortino = calculate_sortino_ratio(returns[ticker])
-                    beta = calculate_beta(returns[ticker], market_returns)
-                    volatility = returns[ticker].std() * np.sqrt(252) if not returns[ticker].empty else 0
+                    volatility = returns[ticker].std() * np.sqrt(252) if len(returns[ticker]) > 0 else 0
                     
                     # Maximum Drawdown 계산
                     try:
@@ -222,7 +172,6 @@ def show_risk_analysis():
                         st.metric("Sharpe Ratio", f"{sharpe:.2f}")
                         st.metric("Sortino Ratio", f"{sortino:.2f}")
                     with col3:
-                        st.metric(f"Beta ({market_index})", f"{beta:.2f}")
                         st.metric("Volatility", f"{volatility:.2%}")
                     with col4:
                         st.metric("Maximum Drawdown", f"{max_drawdown:.2%}")
@@ -244,6 +193,125 @@ def show_risk_analysis():
                         st.plotly_chart(fig)
                     except Exception as e:
                         st.error(f"수익률 분포 시각화 중 오류 발생: {str(e)}")
+                    
+                    # 성과 분석 섹션 추가
+                    st.subheader(f"{ticker} 성과 분석")
+                    
+                    try:
+                        # 누적 수익률 계산
+                        cumulative_returns = (1 + returns[ticker].dropna()).cumprod() - 1
+                        
+                        # 연간화된 수익률 계산
+                        total_days = (data.index[-1] - data.index[0]).days
+                        annual_return = (1 + cumulative_returns.iloc[-1]) ** (365 / total_days) - 1 if total_days > 0 else 0
+                        
+                        # 월간 수익률 계산
+                        # data[ticker]는 이미 Series이므로 바로 resample 가능
+                        try:
+                            monthly_returns = data[ticker].resample('ME').ffill().pct_change().dropna()
+                        except Exception as e:
+                            st.warning(f"월간 수익률 계산 중 오류 발생: {str(e)}")
+                            # 대체 방법: 일간 수익률을 월별로 집계
+                            monthly_returns = pd.Series(dtype=float)
+                        
+                        # 성과 지표 표시
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("누적 수익률", f"{cumulative_returns.iloc[-1]:.2%}")
+                            st.metric("양의 수익률 일수", f"{(returns[ticker] > 0).sum()}/{len(returns[ticker].dropna())}")
+                        with col2:
+                            st.metric("연간화 수익률", f"{annual_return:.2%}")
+                            if len(monthly_returns) > 0:
+                                st.metric("월간 평균 수익률", f"{monthly_returns.mean():.2%}")
+                            else:
+                                st.metric("월간 평균 수익률", "N/A")
+                        with col3:
+                            st.metric("최대 일간 상승", f"{returns[ticker].max():.2%}")
+                            if len(monthly_returns) > 0:
+                                st.metric("최대 월간 상승", f"{monthly_returns.max():.2%}")
+                            else:
+                                st.metric("최대 월간 상승", "N/A")
+                        with col4:
+                            st.metric("최대 일간 하락", f"{returns[ticker].min():.2%}")
+                            if len(monthly_returns) > 0:
+                                st.metric("최대 월간 하락", f"{monthly_returns.min():.2%}")
+                            else:
+                                st.metric("최대 월간 하락", "N/A")
+                        
+                        # 성과 시각화
+                        
+                        # 1. 누적 수익률 그래프
+                        fig_cum = go.Figure()
+                        fig_cum.add_trace(go.Scatter(
+                            x=cumulative_returns.index,
+                            y=cumulative_returns,
+                            mode='lines',
+                            name='누적 수익률',
+                            line=dict(color='#1f77b4', width=2)
+                        ))
+                        fig_cum.update_layout(
+                            title=f"{ticker} 누적 수익률",
+                            xaxis_title="날짜",
+                            yaxis_title="누적 수익률",
+                            yaxis_tickformat='.1%',
+                            hovermode='x unified'
+                        )
+                        st.plotly_chart(fig_cum)
+                        
+                        # 2. 월간 수익률 바 차트
+                        if len(monthly_returns) > 0:
+                            try:
+                                fig_monthly = go.Figure()
+                                fig_monthly.add_trace(go.Bar(
+                                    x=monthly_returns.index,
+                                    y=monthly_returns,
+                                    name='월간 수익률',
+                                    marker_color=monthly_returns.apply(lambda x: '#2ca02c' if x > 0 else '#d62728')
+                                ))
+                                fig_monthly.update_layout(
+                                    title=f"{ticker} 월간 수익률",
+                                    xaxis_title="월",
+                                    yaxis_title="수익률",
+                                    yaxis_tickformat='.1%',
+                                    hovermode='x unified'
+                                )
+                                st.plotly_chart(fig_monthly)
+                            except Exception as e:
+                                st.warning(f"월간 수익률 차트 생성 중 오류 발생: {str(e)}")
+                        
+                        # 3. 롤링 윈도우 성과 지표
+                        if len(returns[ticker].dropna()) > 20:  # 충분한 데이터가 있는 경우에만
+                            # 롤링 윈도우 계산 (20일, 60일)
+                            rolling_returns = returns[ticker].dropna()
+                            rolling_20d = rolling_returns.rolling(window=20).mean() * 20
+                            rolling_60d = rolling_returns.rolling(window=60).mean() * 60
+                            
+                            fig_rolling = go.Figure()
+                            fig_rolling.add_trace(go.Scatter(
+                                x=rolling_20d.index,
+                                y=rolling_20d,
+                                mode='lines',
+                                name='20일 롤링 수익률',
+                                line=dict(color='#ff7f0e', width=2)
+                            ))
+                            fig_rolling.add_trace(go.Scatter(
+                                x=rolling_60d.index,
+                                y=rolling_60d,
+                                mode='lines',
+                                name='60일 롤링 수익률',
+                                line=dict(color='#9467bd', width=2)
+                            ))
+                            fig_rolling.update_layout(
+                                title=f"{ticker} 롤링 윈도우 수익률",
+                                xaxis_title="날짜",
+                                yaxis_title="연율화 수익률",
+                                yaxis_tickformat='.1%',
+                                hovermode='x unified'
+                            )
+                            st.plotly_chart(fig_rolling)
+                    
+                    except Exception as e:
+                        st.error(f"{ticker}의 리스크 지표 계산 중 오류 발생: {str(e)}")
                 
                 except Exception as e:
                     st.error(f"{ticker}의 리스크 지표 계산 중 오류 발생: {str(e)}")
