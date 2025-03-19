@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
+import FinanceDataReader as fdr
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
@@ -12,7 +12,18 @@ import os
 def fetch_stock_data(ticker, start_date, end_date):
     """주식 데이터 가져오기 (캐시 적용)"""
     try:
-        stock = yf.download(ticker, start=start_date, end=end_date)
+        # 티커가 숫자(문자열)인 경우 한국 주식으로 간주
+        if ticker.isdigit():
+            stock = fdr.DataReader(
+                ticker, 
+                start=start_date, 
+                end=end_date, 
+                exchange='KRX'
+            )
+        else:
+            # 해외 주식의 경우
+            stock = fdr.DataReader(ticker, start=start_date, end=end_date)
+        
         return stock['Close'] if not stock.empty else None
     except Exception as e:
         st.error(f"{ticker} 데이터 로드 실패: {str(e)}")
@@ -56,7 +67,9 @@ def calculate_metrics(returns):
         calmar_ratio = np.nan
     
     # 월별 평균 수익률 및 표준편차
-    monthly_return = (1 + returns).resample('ME').prod() - 1
+    monthly_return = returns.groupby(pd.Grouper(freq='M')).apply(
+        lambda x: (1 + x).prod() - 1
+    )
     avg_monthly_return = monthly_return.mean()
     monthly_vol = monthly_return.std()
     
@@ -393,8 +406,8 @@ def show_backtesting():
         
         # 자산 선택 입력 방식
         assets_input = st.text_input(
-            "테스트할 자산의 티커를 입력하세요 (쉼표로 구분, 예: 005930.KS,035720.KS)",
-            value="005930.KS",
+            "테스트할 자산의 티커를 입력하세요 (쉼표로 구분, 예: 005930,AAPL)",
+            value="005930",
             key="new_assets_input"
         )
         new_assets = [ticker.strip() for ticker in assets_input.split(',') 
@@ -553,7 +566,7 @@ def show_backtesting():
     
     # 여기서부터는 선택된 포트폴리오로 백테스팅 실행
     st.markdown("---")
-    st.subheader(f"백테스팅 대상: {st.session_state.selected_portfolio['name']}")
+    st.subheader(f"백테스트 대상: {st.session_state.selected_portfolio['name']}")
     
     # 현재 선택된 포트폴리오 정보 표시 (파이 차트 제거)
     weights_df = pd.DataFrame({
@@ -704,7 +717,8 @@ def show_backtesting():
     # 4. 월별 수익률 히트맵
     st.subheader("4. 월별 수익률 히트맵")
     try:
-        monthly_returns = portfolio_returns.resample('ME').apply(
+        # 월별 수익률 계산 방식 변경
+        monthly_returns = portfolio_returns.groupby(pd.Grouper(freq='M')).apply(
             lambda x: (1 + x).prod() - 1
         )
         
@@ -713,6 +727,7 @@ def show_backtesting():
             # NaN 값 처리
             monthly_returns = monthly_returns.fillna(0)
             
+            # 연도와 월로 그룹화하여 매트릭스 생성
             monthly_returns_matrix = monthly_returns.groupby(
                 [monthly_returns.index.year, monthly_returns.index.month]
             ).first().unstack()

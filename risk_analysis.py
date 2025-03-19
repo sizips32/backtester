@@ -1,10 +1,22 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
-from scipy import stats
+import FinanceDataReader as fdr
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+
+# 상수 정의
+class Config:
+    RISK_FREE_RATE = 0.02
+    TRADING_DAYS = 252
+    CONFIDENCE_LEVELS = {
+        "standard": 0.95,
+        "strict": 0.99
+    }
+    ROLLING_WINDOWS = {
+        "short": 20,
+        "long": 60
+    }
 
 class RiskAnalysisError(Exception):
     """리스크 분석 관련 커스텀 예외"""
@@ -65,6 +77,25 @@ def calculate_sortino_ratio(returns, risk_free_rate=0.02):
         st.error(f"Sortino Ratio 계산 중 오류 발생: {str(e)}")
         return 0
 
+def validate_ticker(ticker):
+    """티커 심볼 검증"""
+    try:
+        df = fdr.DataReader(ticker)
+        return not df.empty
+    except Exception as e:
+        st.warning(f"{ticker}: 유효하지 않은 티커 심볼입니다. ({str(e)})")
+        return False
+
+@st.cache_data
+def fetch_stock_data(ticker, start_date, end_date):
+    """주식 데이터 조회"""
+    try:
+        df = fdr.DataReader(ticker, start=start_date, end=end_date)
+        return df[['Close']] if not df.empty else pd.DataFrame()
+    except Exception as e:
+        st.error(f"{ticker} 데이터 다운로드 실패: {str(e)}")
+        return pd.DataFrame()
+
 def show_risk_analysis():
     try:
         st.header("리스크 분석")
@@ -95,17 +126,22 @@ def show_risk_analysis():
             try:
                 st.subheader("벤치마크 지수 성과")
                 benchmark_tickers = {
-                    "S&P500": "^GSPC",
-                    "KOSPI": "^KS11",
-                    "상해종합": "000001.SS",
-                    "Nikkei225": "^N225"
+                    "S&P500": "US500",    # S&P 500
+                    "KOSPI": "KS11",      # KOSPI
+                    "상해종합": "SSEC",     # 상해종합
+                    "일본Nikkei": "N225"    # 니케이225
                 }
                 
                 benchmark_data = pd.DataFrame()
                 for name, ticker in benchmark_tickers.items():
-                    stock = yf.download(ticker, start=start_date, end=end_date)
-                    if len(stock) > 0:
-                        benchmark_data[name] = stock['Close']
+                    try:
+                        df = fdr.DataReader(ticker, start=start_date, end=end_date)
+                        if not df.empty:
+                            benchmark_data[name] = df['Close']
+                            st.success(f"{name} 데이터 조회 성공")
+                    except Exception as e:
+                        st.warning(f"{name} 데이터 조회 실패: {str(e)}")
+                        continue
                 
                 if not benchmark_data.empty:
                     # 누적수익률 계산
@@ -115,10 +151,10 @@ def show_risk_analysis():
                     # 그래프 생성
                     fig_benchmark = go.Figure()
                     colors = {
-                        "S&P500": "#00ffff",  # 하늘색
-                        "KOSPI": "#ff9900",   # 주황색
-                        "상해종합": "#00ff00", # 연두색
-                        "Nikkei225": "#ff3333" # 빨간색
+                        "S&P500": "#00ffff",      # 하늘색
+                        "KOSPI": "#ff9900",       # 주황색
+                        "상해종합": "#00ff00",     # 연두색
+                        "일본Nikkei": "#ff3333"    # 빨간색
                     }
                     
                     for name in benchmark_data.columns:
@@ -131,8 +167,8 @@ def show_risk_analysis():
                         ))
                     
                     fig_benchmark.update_layout(
-                        height=250,  # 높이 줄임
-                        margin=dict(l=5, r=5, t=25, b=25),  # 여백 줄임
+                        height=250,
+                        margin=dict(l=5, r=5, t=25, b=25),
                         title=dict(
                             text="벤치마크 지수 누적수익률",
                             x=0.5,
@@ -172,15 +208,20 @@ def show_risk_analysis():
                     st.warning("벤치마크 지수 데이터를 가져올 수 없습니다.")
             except Exception as e:
                 st.error(f"벤치마크 지수 처리 중 오류 발생: {str(e)}")
+                st.info("일부 벤치마크 지수 데이터만 표시될 수 있습니다.")
 
         # 티커 입력 받기
         ticker_input = st.text_input(
-            "분석할 종목 코드를 입력하세요 (여러 종목은 쉼표로 구분, 예: 005930.KS,035720.KS)",
-            value="005930.KS"
+            "분석할 종목 코드를 입력하세요 (여러 종목은 쉼표로 구분, 예: 005930,035720)",
+            value="005930"
         )
         
         # 입력된 티커를 리스트로 변환
-        tickers = [ticker.strip() for ticker in ticker_input.split(',') if ticker.strip()]
+        tickers = [
+            ticker.strip() 
+            for ticker in ticker_input.split(',') 
+            if ticker.strip() and validate_ticker(ticker.strip())
+        ]
         
         if not tickers:
             st.warning("종목 코드를 입력해주세요.")
@@ -193,13 +234,13 @@ def show_risk_analysis():
         # 종목 데이터 가져오기
         for ticker in tickers:
             try:
-                stock = yf.download(ticker, start=start_date, end=end_date)
-                if len(stock) == 0 or 'Close' not in stock.columns:
-                    failed_tickers.append(ticker)
+                stock_data = fetch_stock_data(ticker, start_date, end_date)
+                if stock_data.empty:
+                    st.warning(f"{ticker}: 데이터를 찾을 수 없습니다.")
                     continue
-                data[ticker] = stock['Close']
+                data[ticker] = stock_data['Close']
             except Exception as e:
-                st.error(f"{ticker} 데이터 로드 중 오류 발생: {str(e)}")
+                st.error(f"{ticker} 데이터 다운로드 실패: {str(e)}")
                 failed_tickers.append(ticker)
         
         # 실패한 종목들 제거
@@ -233,7 +274,8 @@ def show_risk_analysis():
                     cvar_95 = calculate_cvar(returns[ticker], 0.95)
                     sharpe = calculate_sharpe_ratio(returns[ticker])
                     sortino = calculate_sortino_ratio(returns[ticker])
-                    volatility = returns[ticker].std() * np.sqrt(252) if len(returns[ticker]) > 0 else 0
+                    has_data = len(returns[ticker]) > 0
+                    volatility = returns[ticker].std() * np.sqrt(252) if has_data else 0
                     
                     # Maximum Drawdown 계산
                     try:
@@ -285,38 +327,78 @@ def show_risk_analysis():
                         
                         # 연간화된 수익률 계산
                         total_days = (data.index[-1] - data.index[0]).days
-                        annual_return = (1 + cumulative_returns.iloc[-1]) ** (365 / total_days) - 1 if total_days > 0 else 0
+                        annual_return = (
+                            (1 + cumulative_returns.iloc[-1]) ** (365 / total_days) - 1 
+                            if total_days > 0 
+                            else 0
+                        )
                         
                         # 월간 수익률 계산
-                        # data[ticker]는 이미 Series이므로 바로 resample 가능
                         try:
-                            monthly_returns = data[ticker].resample('ME').ffill().pct_change().dropna()
+                            # 일별 데이터를 월별로 리샘플링
+                            monthly_data = data[ticker].resample('M').last()
+                            # 월간 수익률 계산
+                            monthly_returns = monthly_data.pct_change().dropna()
+                            
+                            if len(monthly_returns) == 0:
+                                st.warning("월간 수익률을 계산할 수 있는 충분한 데이터가 없습니다.")
+                                monthly_returns = pd.Series(dtype=float)
                         except Exception as e:
                             st.warning(f"월간 수익률 계산 중 오류 발생: {str(e)}")
                             # 대체 방법: 일간 수익률을 월별로 집계
-                            monthly_returns = pd.Series(dtype=float)
+                            try:
+                                # 일간 수익률에 날짜 인덱스의 연-월을 기준으로 그룹화하여 집계
+                                monthly_returns = returns[ticker].groupby(
+                                    returns[ticker].index.to_period('M')
+                                ).apply(
+                                    lambda x: (1 + x).prod() - 1
+                                ).dropna()
+                            except Exception as sub_e:
+                                st.error(f"대체 월간 수익률 계산 중 오류 발생: {str(sub_e)}")
+                                monthly_returns = pd.Series(dtype=float)
                         
                         # 성과 지표 표시
                         col1, col2, col3, col4 = st.columns(4)
                         with col1:
-                            st.metric("누적 수익률", f"{cumulative_returns.iloc[-1]:.2%}")
-                            st.metric("양의 수익률 일수", f"{(returns[ticker] > 0).sum()}/{len(returns[ticker].dropna())}")
+                            st.metric(
+                                "누적 수익률",
+                                f"{cumulative_returns.iloc[-1]:.2%}"
+                            )
+                            st.metric(
+                                "양의 수익률 일수",
+                                f"{(returns[ticker] > 0).sum()}/{len(returns[ticker].dropna())}"
+                            )
                         with col2:
                             st.metric("연간화 수익률", f"{annual_return:.2%}")
                             if len(monthly_returns) > 0:
-                                st.metric("월간 평균 수익률", f"{monthly_returns.mean():.2%}")
+                                st.metric(
+                                    "월간 평균 수익률",
+                                    f"{monthly_returns.mean():.2%}"
+                                )
                             else:
                                 st.metric("월간 평균 수익률", "N/A")
                         with col3:
-                            st.metric("최대 일간 상승", f"{returns[ticker].max():.2%}")
+                            st.metric(
+                                "최대 일간 상승",
+                                f"{returns[ticker].max():.2%}"
+                            )
                             if len(monthly_returns) > 0:
-                                st.metric("최대 월간 상승", f"{monthly_returns.max():.2%}")
+                                st.metric(
+                                    "최대 월간 상승",
+                                    f"{monthly_returns.max():.2%}"
+                                )
                             else:
                                 st.metric("최대 월간 상승", "N/A")
                         with col4:
-                            st.metric("최대 일간 하락", f"{returns[ticker].min():.2%}")
+                            st.metric(
+                                "최대 일간 하락",
+                                f"{returns[ticker].min():.2%}"
+                            )
                             if len(monthly_returns) > 0:
-                                st.metric("최대 월간 하락", f"{monthly_returns.min():.2%}")
+                                st.metric(
+                                    "최대 월간 하락",
+                                    f"{monthly_returns.min():.2%}"
+                                )
                             else:
                                 st.metric("최대 월간 하락", "N/A")
                         

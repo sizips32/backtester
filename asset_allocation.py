@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
-from scipy.optimize import minimize
+import FinanceDataReader as fdr
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from optimization import (
@@ -20,7 +19,7 @@ def portfolio_stats(weights, returns):
     sharpe_ratio = portfolio_return / portfolio_vol
     return portfolio_return, portfolio_vol, sharpe_ratio
 
-def optimize_portfolio(returns, method='markowitz', target_risk=None):
+def optimize_portfolio(returns, method='markowitz'):
     """최적화 로직 개선"""
     n_assets = returns.shape[1]
     
@@ -37,6 +36,7 @@ def optimize_portfolio(returns, method='markowitz', target_risk=None):
     return optimization_methods[method]()
 
 def get_strategy_description(method):
+    """투자 전략 설명을 반환"""
     descriptions = {
         "마코위츠 최적화": """
         📈 현대 포트폴리오 이론의 기초가 되는 방법
@@ -82,12 +82,13 @@ def get_strategy_description(method):
     return descriptions.get(method, "설명이 없습니다.")
 
 def show_asset_allocation():
+    """자산 배분 최적화 UI 표시"""
     st.header("최적 자산 배분")
     
     # 자산 입력 받기
     assets_input = st.text_input(
-        "분석할 자산의 종목코드를 입력하세요 (예: 005930.KS, 000660.KS)",
-        value="005930.KS, 000660.KS"
+        "분석할 종목코드를 입력하세요 (예: 005930, 000660)",
+        value="005930, 000660"
     )
     
     # 입력값 처리
@@ -114,11 +115,11 @@ def show_asset_allocation():
     data = pd.DataFrame()
     for asset in assets:
         try:
-            stock = yf.download(asset, start=start_date, end=end_date)
-            if stock.empty:
+            stock_data = fdr.DataReader(asset, start_date, end_date)
+            if stock_data.empty:
                 st.error(f"{asset}에 대한 데이터가 없습니다.")
                 return
-            data[asset] = stock['Close']
+            data[asset] = stock_data['Close']
         except Exception as e:
             st.error(f"{asset} 데이터 로드 중 오류 발생: {e}")
             return
@@ -138,11 +139,6 @@ def show_asset_allocation():
         st.markdown("---")
         st.subheader("📌 전략 설명")
         st.markdown(get_strategy_description(optimization_method))
-        
-        allocation_method = st.radio(
-            "자산 배분 방식",
-            ["최적화 계산", "직접 설정"]
-        )
     
     method_map = {
         "마코위츠 최적화": "markowitz",
@@ -152,7 +148,10 @@ def show_asset_allocation():
     }
     
     try:
-        weights = optimize_portfolio(returns, method=method_map[optimization_method])
+        weights = optimize_portfolio(
+            returns,
+            method=method_map[optimization_method]
+        )
         
         # 결과 표시
         st.subheader("최적 자산 배분 비율")
