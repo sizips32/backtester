@@ -7,27 +7,80 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import json
 import os
+import time
+from typing import Optional
 
 @st.cache_data(ttl=3600)  # 1시간 캐시
-def fetch_stock_data(ticker, start_date, end_date):
-    """주식 데이터 가져오기 (캐시 적용)"""
-    try:
-        # 티커가 숫자(문자열)인 경우 한국 주식으로 간주
-        if ticker.isdigit():
-            stock = fdr.DataReader(
-                ticker, 
-                start=start_date, 
-                end=end_date, 
-                exchange='KRX'
-            )
-        else:
-            # 해외 주식의 경우
-            stock = fdr.DataReader(ticker, start=start_date, end=end_date)
-        
-        return stock['Close'] if not stock.empty else None
-    except Exception as e:
-        st.error(f"{ticker} 데이터 로드 실패: {str(e)}")
-        return None
+def fetch_stock_data(
+    ticker: str,
+    start_date: datetime,
+    end_date: datetime,
+    max_retries: int = 3
+) -> Optional[pd.Series]:
+    """주식 데이터 가져오기 (캐시 적용)
+    
+    Args:
+        ticker: 종목 코드
+        start_date: 시작일
+        end_date: 종료일
+        max_retries: 최대 재시도 횟수
+    
+    Returns:
+        pd.Series: 종가 데이터. 실패시 None 반환
+    """
+    for attempt in range(max_retries):
+        try:
+            # 티커가 숫자(문자열)인 경우 한국 주식으로 간주
+            if ticker.isdigit():
+                stock = fdr.DataReader(
+                    ticker, 
+                    start=start_date, 
+                    end=end_date, 
+                    exchange='KRX'
+                )
+            else:
+                # 해외 주식의 경우
+                stock = fdr.DataReader(ticker, start=start_date, end=end_date)
+            
+            if stock.empty:
+                error_msg = f"{ticker}: 해당 기간에 데이터가 없습니다."
+                if attempt < max_retries - 1:
+                    st.warning(
+                        f"{error_msg} 재시도 중... ({attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(1)  # 1초 대기
+                    continue
+                else:
+                    st.error(error_msg)
+                    return None
+            
+            return stock['Close']
+            
+        except (ConnectionError, ConnectionResetError) as e:
+            error_msg = f"{ticker}: 연결 오류가 발생했습니다 - {str(e)}"
+            if attempt < max_retries - 1:
+                st.warning(
+                    f"{error_msg} 재시도 중... ({attempt + 1}/{max_retries})"
+                )
+                time.sleep(2)  # 2초 대기 후 재시도
+                continue
+            else:
+                st.error(f"{error_msg} - 최대 재시도 횟수 초과")
+                return None
+                
+        except Exception as e:
+            error_msg = f"{ticker} 데이터 로드 실패: {str(e)}"
+            if attempt < max_retries - 1:
+                st.warning(
+                    f"{error_msg} 재시도 중... ({attempt + 1}/{max_retries})"
+                )
+                time.sleep(1)
+                continue
+            else:
+                st.error(error_msg)
+                return None
+    
+    return None
 
 def calculate_portfolio_value(data, weights):
     """벡터화된 포트폴리오 가치 계산"""
@@ -166,6 +219,44 @@ def show_backtesting():
     
     # 사이드바에 expander로 백테스팅 설명과 해석 방법 추가
     with st.sidebar:
+        st.title("백테스팅 설정")
+        
+        # 기간 설정
+        st.subheader("백테스트 기간")
+        
+        # 기본 기간 옵션
+        period_options = {
+            "1년": 365,
+            "3년": 365 * 3,
+            "5년": 365 * 5,
+            "10년": 365 * 10,
+            "직접 설정": 0
+        }
+        
+        selected_period = st.selectbox(
+            "기간 선택",
+            options=list(period_options.keys()),
+            index=0
+        )
+        
+        if selected_period == "직접 설정":
+            start_date = st.date_input(
+                "시작일",
+                datetime.now() - timedelta(days=365)
+            )
+            end_date = st.date_input(
+                "종료일",
+                datetime.now()
+            )
+        else:
+            end_date = datetime.now().date()
+            days = period_options[selected_period]
+            start_date = end_date - timedelta(days=days)
+            st.info(f"시작일: {start_date.strftime('%Y-%m-%d')}")
+            st.info(f"종료일: {end_date.strftime('%Y-%m-%d')}")
+        
+        st.markdown("---")
+        
         st.title("백테스팅 가이드")
         
         # 백테스팅이란?
@@ -585,17 +676,6 @@ def show_backtesting():
         use_container_width=True,
         hide_index=True
     )
-    
-    # 기간 설정
-    st.subheader("백테스트 기간 설정")
-    date_col1, date_col2 = st.columns(2)
-    with date_col1:
-        start_date = st.date_input(
-            "백테스트 시작일",
-            datetime.now() - timedelta(days=365)
-        )
-    with date_col2:
-        end_date = st.date_input("백테스트 종료일", datetime.now())
     
     # 데이터 가져오기
     with st.spinner("데이터를 불러오는 중..."):
