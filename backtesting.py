@@ -84,7 +84,9 @@ def fetch_stock_data(
 
 def calculate_portfolio_value(data, weights):
     """벡터화된 포트폴리오 가치 계산"""
-    returns = data.pct_change()
+    # NA 값을 먼저 처리한 후 수익률 계산
+    data_filled = data.fillna(method='ffill')
+    returns = data_filled.pct_change(fill_method=None)
     weighted_returns = (returns * pd.Series(weights)).sum(axis=1)
     return (1 + weighted_returns).cumprod()
 
@@ -215,6 +217,15 @@ def delete_portfolio(name):
 
 def show_backtesting():
     """포트폴리오 백테스팅 페이지"""
+    # 세션 상태 초기화
+    if 'selected_portfolio' not in st.session_state:
+        st.session_state['selected_portfolio'] = {
+            'assets': [],
+            'weights': {},
+            'name': '',
+            'source': None
+        }
+    
     st.header("포트폴리오 백테스팅")
     
     # 사이드바에 expander로 백테스팅 설명과 해석 방법 추가
@@ -709,14 +720,17 @@ def show_backtesting():
         x=portfolio_value.index,
         y=portfolio_value.values,
         mode='lines',
-        name='Portfolio Value'
+        name='포트폴리오 가치'
     ))
     fig.update_layout(
         title="포트폴리오 가치 변화",
         xaxis_title="날짜",
-        yaxis_title="가치 (초기 투자 = 1)"
+        yaxis_title="가치 (초기 투자 = 1)",
+        template="plotly_white",
+        showlegend=True,
+        height=600
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, theme=None)
     
     # 2. 종목 간 상관계수 히트맵
     st.subheader("2. 종목 간 상관계수")
@@ -731,14 +745,17 @@ def show_backtesting():
         y=correlation_matrix.index,
         colorscale='RdBu_r',  # Red Blue reversed
         zmin=-1, zmax=1,
-        colorbar=dict(title="상관계수")
+        colorbar=dict(title="상관계수"),
+        hoverongaps=False
     ))
     fig_corr.update_layout(
         title="종목 간 상관계수 히트맵",
         xaxis_title="종목",
-        yaxis_title="종목"
+        yaxis_title="종목",
+        template="plotly_white",
+        height=600
     )
-    st.plotly_chart(fig_corr, use_container_width=True)
+    st.plotly_chart(fig_corr, use_container_width=True, theme=None)
     
     # 3. 포트폴리오 성과 및 리스크 지표
     st.subheader("3. 포트폴리오 성과 및 리스크 지표")
@@ -816,17 +833,25 @@ def show_backtesting():
             if not monthly_returns_matrix.empty and not monthly_returns_matrix.isnull().all().all():
                 fig_monthly = go.Figure(data=go.Heatmap(
                     z=monthly_returns_matrix.values,
-                    x=monthly_returns_matrix.columns,
+                    x=[f"{i}월" for i in monthly_returns_matrix.columns],
                     y=monthly_returns_matrix.index,
                     colorscale='RdYlGn',
-                    colorbar=dict(title="수익률")
+                    colorbar=dict(title="수익률"),
+                    hoverongaps=False,
+                    text=[[f"{val:.1%}" if not pd.isna(val) else "" 
+                          for val in row] 
+                         for row in monthly_returns_matrix.values],
+                    texttemplate="%{text}",
+                    textfont={"size": 10}
                 ))
                 fig_monthly.update_layout(
                     title="월별 수익률 히트맵",
                     xaxis_title="월",
-                    yaxis_title="년"
+                    yaxis_title="년",
+                    template="plotly_white",
+                    height=600
                 )
-                st.plotly_chart(fig_monthly, use_container_width=True)
+                st.plotly_chart(fig_monthly, use_container_width=True, theme=None)
             else:
                 st.info("월별 수익률 히트맵을 생성하기 위한 충분한 데이터가 없습니다.")
         else:
