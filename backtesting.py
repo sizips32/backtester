@@ -10,6 +10,16 @@ import os
 import time
 from typing import Optional
 
+# 에러 처리 시스템 import
+from utils.error_handler import (
+    handle_errors, safe_execute, ErrorRecovery,
+    TickerNotFoundError, DataUnavailableError, InsufficientDataError,
+    error_handler
+)
+
+# 통합 데이터 서비스 import
+from services.data_service import data_service
+
 @st.cache_data(ttl=3600)  # 1시간 캐시
 def fetch_stock_data(
     ticker: str,
@@ -17,7 +27,7 @@ def fetch_stock_data(
     end_date: datetime,
     max_retries: int = 3
 ) -> Optional[pd.Series]:
-    """주식 데이터 가져오기 (캐시 적용)
+    """주식 데이터 가져오기 (통합 데이터 서비스 사용)
     
     Args:
         ticker: 종목 코드
@@ -28,65 +38,30 @@ def fetch_stock_data(
     Returns:
         pd.Series: 종가 데이터. 실패시 None 반환
     """
-    for attempt in range(max_retries):
-        try:
-            # 티커가 숫자(문자열)인 경우 한국 주식으로 간주
-            if ticker.isdigit():
-                stock = fdr.DataReader(
-                    ticker, 
-                    start=start_date, 
-                    end=end_date, 
-                    exchange='KRX'
-                )
-            else:
-                # 해외 주식의 경우
-                stock = fdr.DataReader(ticker, start=start_date, end=end_date)
-            
-            if stock.empty:
-                error_msg = f"{ticker}: 해당 기간에 데이터가 없습니다."
-                if attempt < max_retries - 1:
-                    st.warning(
-                        f"{error_msg} 재시도 중... ({attempt + 1}/{max_retries})"
-                    )
-                    time.sleep(1)  # 1초 대기
-                    continue
-                else:
-                    st.error(error_msg)
-                    return None
-            
-            return stock['Close']
-            
-        except (ConnectionError, ConnectionResetError) as e:
-            error_msg = f"{ticker}: 연결 오류가 발생했습니다 - {str(e)}"
-            if attempt < max_retries - 1:
-                st.warning(
-                    f"{error_msg} 재시도 중... ({attempt + 1}/{max_retries})"
-                )
-                time.sleep(2)  # 2초 대기 후 재시도
-                continue
-            else:
-                st.error(f"{error_msg} - 최대 재시도 횟수 초과")
-                return None
-                
-        except Exception as e:
-            error_msg = f"{ticker} 데이터 로드 실패: {str(e)}"
-            if attempt < max_retries - 1:
-                st.warning(
-                    f"{error_msg} 재시도 중... ({attempt + 1}/{max_retries})"
-                )
-                time.sleep(1)
-                continue
-            else:
-                st.error(error_msg)
-                return None
-    
-    return None
+    try:
+        # 통합 데이터 서비스 사용
+        stock_data = data_service.fetch_single_stock(
+            ticker, start_date, end_date
+        )
+        
+        if stock_data is not None:
+            # Close 컬럼만 반환
+            if 'Close' in stock_data.columns:
+                return stock_data['Close']
+            elif len(stock_data.columns) == 1:
+                return stock_data.iloc[:, 0]
+        
+        return None
+        
+    except Exception as e:
+        st.error(f"{ticker} 데이터 로드 실패: {str(e)}")
+        return None
 
 def calculate_portfolio_value(data, weights):
     """벡터화된 포트폴리오 가치 계산"""
     # NA 값을 먼저 처리한 후 수익률 계산
-    data_filled = data.fillna(method='ffill')
-    returns = data_filled.pct_change(fill_method=None)
+    data_filled = data.ffill()
+    returns = data_filled.pct_change()
     weighted_returns = (returns * pd.Series(weights)).sum(axis=1)
     return (1 + weighted_returns).cumprod()
 
@@ -122,7 +97,7 @@ def calculate_metrics(returns):
         calmar_ratio = np.nan
     
     # 월별 평균 수익률 및 표준편차
-    monthly_return = returns.groupby(pd.Grouper(freq='M')).apply(
+    monthly_return = returns.groupby(pd.Grouper(freq='ME')).apply(
         lambda x: (1 + x).prod() - 1
     )
     avg_monthly_return = monthly_return.mean()
@@ -815,7 +790,7 @@ def show_backtesting():
     st.subheader("4. 월별 수익률 히트맵")
     try:
         # 월별 수익률 계산 방식 변경
-        monthly_returns = portfolio_returns.groupby(pd.Grouper(freq='M')).apply(
+        monthly_returns = portfolio_returns.groupby(pd.Grouper(freq='ME')).apply(
             lambda x: (1 + x).prod() - 1
         )
         

@@ -336,7 +336,7 @@ def show_risk_analysis():
                         # 월간 수익률 계산
                         try:
                             # 일별 데이터를 월별로 리샘플링
-                            monthly_data = data[ticker].resample('M').last()
+                            monthly_data = data[ticker].resample('ME').last()
                             # 월간 수익률 계산
                             monthly_returns = monthly_data.pct_change().dropna()
                             
@@ -349,7 +349,7 @@ def show_risk_analysis():
                             try:
                                 # 일간 수익률에 날짜 인덱스의 연-월을 기준으로 그룹화하여 집계
                                 monthly_returns = returns[ticker].groupby(
-                                    returns[ticker].index.to_period('M')
+                                    returns[ticker].index.to_period('ME')
                                 ).apply(
                                     lambda x: (1 + x).prod() - 1
                                 ).dropna()

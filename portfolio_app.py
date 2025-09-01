@@ -11,6 +11,32 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import FinanceDataReader as fdr
 
+# 설정 시스템 import
+from config.app_config import get_config, get_ui_config, get_trading_config
+
+# 에러 처리 시스템 import
+from utils.error_handler import (
+    handle_errors, safe_execute, ErrorRecovery,
+    TickerNotFoundError, DataUnavailableError, InsufficientDataError,
+    error_handler
+)
+
+# 데이터 검증 시스템 import
+from utils.validators import (
+    DataValidator, DataQualityChecker, PortfolioValidator,
+    validate_ticker_input, validate_weights_input, validate_date_input,
+    show_validation_results
+)
+
+# 로깅 시스템 import
+from utils.logger import (
+    portfolio_logger, log_user_action, log_data_operation, 
+    log_calculation_result, show_log_dashboard
+)
+
+# 통합 데이터 서비스 import
+from services.data_service import data_service
+
 # 데이터베이스 모듈 import
 from utils.db import (
     create_portfolio, get_all_portfolios, get_portfolio_by_id,
@@ -19,147 +45,45 @@ from utils.db import (
 )
 
 # 모듈 레벨 초기화 코드는 유지하되 함수 내에서도 초기화하도록 합니다
-if 'current_portfolio_id' not in st.session_state:
-    st.session_state.current_portfolio_id = None
+def initialize_session_state():
+    """세션 상태를 안전하게 초기화합니다."""
+    if 'current_portfolio_id' not in st.session_state:
+        st.session_state.current_portfolio_id = None
+    
+    if 'portfolios' not in st.session_state:
+        st.session_state.portfolios = get_all_portfolios()
+    
+    if 'data_cache' not in st.session_state:
+        st.session_state.data_cache = {}
 
-if 'portfolios' not in st.session_state:
-    st.session_state.portfolios = get_all_portfolios()
+# 초기화 함수 호출
+initialize_session_state()
 
 def refresh_portfolios():
     """포트폴리오 목록을 새로고침"""
     st.session_state.portfolios = get_all_portfolios()
 
 def fetch_current_price(stock):
-    """실시간 주가를 가져옵니다."""
-    try:
-        # 한국 주식인지 확인
-        is_korean = (
-            (len(stock) in [6, 7] and stock.isdigit()) or 
-            stock.endswith('.KS') or 
-            stock.endswith('.KQ')
-        )
-        
-        # 심볼 정리
-        if is_korean:
-            clean_symbol = stock.replace('.KS', '').replace('.KQ', '')
-        else:
-            clean_symbol = stock.replace('^', '')  # ^GSPC와 같은 특수 심볼 처리
-        
-        # FinanceDataReader로 현재가 조회
-        df = fdr.DataReader(clean_symbol)
-        if len(df) > 0:
-            return float(df['Close'].iloc[-1]), None
-        
-        # fdr 실패시 yfinance로 시도
-        ticker = yf.Ticker(stock)
-        info = ticker.info
-        
-        if 'regularMarketPrice' in info and info['regularMarketPrice'] is not None:
-            return float(info['regularMarketPrice']), None
-        elif 'currentPrice' in info and info['currentPrice'] is not None:
-            return float(info['currentPrice']), None
-        
-        return None, "가격 정보를 가져올 수 없습니다."
-
-    except Exception as e:
-        return None, f"오류 발생: {str(e)}"
+    """실시간 주가를 가져옵니다. (통합 데이터 서비스 사용)"""
+    return data_service.get_current_price(stock)
 
 def fetch_historical_data(symbols, start_date, end_date):
-    """여러 종목의 히스토리컬 데이터를 가져옵니다."""
-    data = {}
-    failures = []
+    """여러 종목의 히스토리컬 데이터를 가져옵니다. (통합 데이터 서비스 사용)"""
+    # 날짜를 datetime 객체로 변환
+    if isinstance(start_date, str):
+        start_date = pd.to_datetime(start_date)
+    if isinstance(end_date, str):
+        end_date = pd.to_datetime(end_date)
     
-    # 진행 상황 표시
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    # 통합 데이터 서비스 사용
+    data_dict = data_service.fetch_multiple_stocks(
+        symbols, start_date, end_date, show_progress=True
+    )
     
-    # 세션 상태에 캐시 초기화
-    if 'data_cache' not in st.session_state:
-        st.session_state.data_cache = {}
-    
-    cache_key = f"{','.join(sorted(symbols))}_{start_date}_{end_date}"
-    
-    # 캐시된 데이터가 있으면 사용
-    if cache_key in st.session_state.data_cache:
-        progress_bar.empty()
-        status_text.empty()
-        return st.session_state.data_cache[cache_key]
-    
-    for i, symbol in enumerate(symbols):
-        # 진행률 업데이트
-        progress_percent = (i / len(symbols))
-        progress_bar.progress(progress_percent)
-        status_text.text(f"{symbol} 데이터 가져오는 중... ({i+1}/{len(symbols)})")
-        
-        try:
-            # 한국 주식인지 확인
-            is_korean = (
-                (len(symbol) in [6, 7] and symbol.isdigit()) or 
-                symbol.endswith('.KS') or 
-                symbol.endswith('.KQ')
-            )
-            
-            # 심볼 정리
-            if is_korean:
-                clean_symbol = symbol.replace('.KS', '').replace('.KQ', '')
-            else:
-                clean_symbol = symbol.replace('^', '')  # ^GSPC와 같은 특수 심볼 처리
-            
-            # FinanceDataReader로 데이터 가져오기
-            df = fdr.DataReader(clean_symbol, start_date, end_date)
-            if len(df) > 0:
-                data[symbol] = df['Close']
-                continue
-            
-            # fdr 실패시 yfinance로 시도
-            df = yf.download(
-                symbol,
-                start=start_date,
-                end=end_date,
-                progress=False
-            )
-            
-            if len(df) > 0:
-                data[symbol] = df['Adj Close']
-            else:
-                failures.append((symbol, "데이터를 찾을 수 없습니다."))
-                
-        except Exception as e:
-            failures.append((symbol, str(e)))
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    if not data:
-        if failures:
-            st.error("데이터를 가져오는데 실패했습니다:")
-            for symbol, reason in failures[:5]:
-                st.error(f"• {symbol}: {reason}")
-            if len(failures) > 5:
-                st.error(f"외 {len(failures)-5}개 종목 실패")
-        return pd.DataFrame()
-    
-    try:
-        df = pd.DataFrame(data)
-        
-        # 결측치 확인 및 처리
-        na_percentage = df.isna().mean().mean() * 100
-        if na_percentage > 50:
-            st.warning(
-                f"가져온 데이터의 {na_percentage:.1f}%가 결측치입니다. "
-                "결과가 부정확할 수 있습니다."
-            )
-        
-        # NaN 값 처리
-        df = df.fillna(method='ffill').fillna(method='bfill')
-        
-        # 캐시에 저장
-        st.session_state.data_cache[cache_key] = df
-        
-        return df
-        
-    except Exception as e:
-        st.error(f"데이터프레임 생성 중 오류 발생: {str(e)}")
+    # 데이터프레임으로 변환
+    if data_dict:
+        return data_service.combine_price_data(data_dict)
+    else:
         return pd.DataFrame()
 
 # 포트폴리오 수익률 계산
@@ -391,25 +315,37 @@ def show_portfolio_management():
 
 # 종목 추가 함수
 def add_investment(portfolio_id, symbol, quantity, purchase_price, purchase_date, asset_type):
-    # 입력값 검증
-    error_message = None
-    if not symbol:
-        error_message = "종목 이름을 입력해주세요."
-    elif quantity <= 0:
-        error_message = "수량은 0보다 커야 합니다."
-    elif purchase_price <= 0:
-        error_message = "매수가는 0보다 커야 합니다."
-
-    if error_message:
-        st.sidebar.error(error_message)
+    # 사용자 액션 로깅
+    log_user_action("add_investment", 
+                   portfolio_id=portfolio_id, 
+                   symbol=symbol, 
+                   asset_type=asset_type)
+    
+    # 종목 코드 검증
+    if not validate_ticker_input(symbol):
+        portfolio_logger.log_validation_result("ticker_validation", False, [f"Invalid ticker: {symbol}"])
+        return False
+    
+    # 자산 데이터 검증
+    asset_valid, asset_errors = DataValidator.validate_asset_data(
+        asset_type, quantity, purchase_price
+    )
+    
+    if not asset_valid:
+        portfolio_logger.log_validation_result("asset_data_validation", False, asset_errors)
+        for error in asset_errors:
+            st.sidebar.error(error)
         return False
 
     # 주가 정보 가져오기
     try:
         current_price, error_msg = fetch_current_price(symbol)
         if current_price is None:
+            log_data_operation("fetch_current_price", False, symbol=symbol, error=error_msg)
             st.sidebar.error(error_msg)
             return False
+        else:
+            log_data_operation("fetch_current_price", True, symbol=symbol, price=current_price)
 
         # 데이터베이스에 저장
         holding_id = add_holding_to_portfolio(
@@ -422,12 +358,31 @@ def add_investment(portfolio_id, symbol, quantity, purchase_price, purchase_date
         )
         
         if holding_id:
+            portfolio_logger.log_portfolio_operation(
+                "add_holding", 
+                portfolio_id=portfolio_id,
+                symbols=[symbol],
+                success=True,
+                details={"quantity": quantity, "price": purchase_price}
+            )
             return True
         else:
+            portfolio_logger.log_portfolio_operation(
+                "add_holding", 
+                portfolio_id=portfolio_id,
+                symbols=[symbol],
+                success=False,
+                details={"error": "Database insert failed"}
+            )
             st.sidebar.error("종목 추가 중 오류가 발생했습니다.")
             return False
 
     except Exception as e:
+        portfolio_logger.log_exception(e, {
+            "function": "add_investment",
+            "portfolio_id": portfolio_id,
+            "symbol": symbol
+        })
         st.sidebar.error(f"종목 정보를 가져오는 중 오류가 발생했습니다: {str(e)}")
         return False
 
@@ -1665,41 +1620,26 @@ def validate_ticker(ticker):
 
 # 포트폴리오 앱의 주요 콘텐츠를 렌더링하는 함수
 def render_portfolio_content():
-    """포트폴리오 앱의 주요 콘텐츠만 렌더링합니다."""
-    # 세션 상태 초기화 - 함수 시작 시점에 반드시 초기화
-    if 'current_portfolio_id' not in st.session_state:
-        st.session_state.current_portfolio_id = None
-
-    if 'portfolios' not in st.session_state:
-        st.session_state.portfolios = get_all_portfolios()
+    """포트폴리오 콘텐츠를 렌더링합니다."""
+    # 세션 상태가 없으면 기본값 사용
+    current_portfolio_id = getattr(st.session_state, 'current_portfolio_id', None)
+    portfolios = getattr(st.session_state, 'portfolios', get_all_portfolios())
     
-    # 메인 타이틀 스타일링
-    st.markdown("""
-        <h1 style='text-align: center; margin-bottom: 40px;'>
-            💰 포트폴리오 백테스터
-        </h1>
-        <p style='text-align: center; color: #666; margin-bottom: 30px;'>
-            효율적인 포트폴리오 관리와 리스크 분석을 위한 올인원 솔루션
-        </p>
-    """, unsafe_allow_html=True)
-    
-    # 사이드바 - 포트폴리오 선택
-    st.sidebar.markdown("<h3>포트폴리오 선택</h3>", unsafe_allow_html=True)
-    
-    portfolios = get_all_portfolios()
-    portfolio_names = {p['id']: p['name'] for p in portfolios}
-    
-    if portfolio_names:
+    # 사이드바에 포트폴리오 선택기 표시
+    if portfolios:
+        portfolio_names = {p['id']: p['name'] for p in portfolios}
+        
         selected_portfolio = st.sidebar.selectbox(
-            "포트폴리오",
+            "포트폴리오 선택",
             options=list(portfolio_names.keys()),
             format_func=lambda x: portfolio_names[x],
             key="sidebar_portfolio_selector"
         )
         
-        if selected_portfolio != st.session_state.current_portfolio_id:
-            st.session_state.current_portfolio_id = selected_portfolio
-            st.rerun()
+        if selected_portfolio != current_portfolio_id:
+            if hasattr(st, 'session_state'):
+                st.session_state.current_portfolio_id = selected_portfolio
+                st.rerun()
     else:
         st.sidebar.info("포트폴리오를 생성해주세요.")
     
@@ -1718,7 +1658,8 @@ def render_portfolio_content():
                 new_portfolio_id = create_portfolio(name, description)
                 if new_portfolio_id:
                     refresh_portfolios()
-                    st.session_state.current_portfolio_id = new_portfolio_id
+                    if hasattr(st, 'session_state'):
+                        st.session_state.current_portfolio_id = new_portfolio_id
                     st.sidebar.success(f"'{name}' 포트폴리오가 생성되었습니다.")
                     st.rerun()
                 else:
@@ -1739,11 +1680,11 @@ def render_portfolio_content():
         submitted = st.form_submit_button('종목 추가', use_container_width=True)
 
         if submitted:
-            if not st.session_state.current_portfolio_id:
+            if not current_portfolio_id:
                 st.sidebar.error("먼저 포트폴리오를 선택해주세요.")
             else:
                 if add_investment(
-                    st.session_state.current_portfolio_id,
+                    current_portfolio_id,
                     symbol,
                     quantity,
                     purchase_price,
@@ -1754,9 +1695,9 @@ def render_portfolio_content():
                     st.rerun()
     
     # 메인 콘텐츠
-    if st.session_state.current_portfolio_id:
+    if current_portfolio_id:
         # 선택된 포트폴리오의 전체 정보 표시
-        portfolio = get_portfolio_by_id(st.session_state.current_portfolio_id)
+        portfolio = get_portfolio_by_id(current_portfolio_id)
         if portfolio:
             # 포트폴리오 기본 정보 섹션
             col1, col2 = st.columns([2, 1])
@@ -1786,6 +1727,9 @@ def main():
         page_icon="💰",
         layout="wide"
     )
+    
+    # 세션 상태 초기화 (독립 실행 시 안전성 보장)
+    initialize_session_state()
     
     # 포트폴리오 앱 콘텐츠 렌더링
     render_portfolio_content()

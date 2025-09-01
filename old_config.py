@@ -1,24 +1,24 @@
 """설정 파일 분리"""
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List
 
 @dataclass
 class Config:
-    PORTFOLIO_FILE = 'portfolio.json'
-    DEFAULT_RISK_FREE_RATE = 0.02
-    MARKET_INDICES = {
+    PORTFOLIO_FILE: str = 'portfolio.json'
+    DEFAULT_RISK_FREE_RATE: float = 0.02
+    MARKET_INDICES: Dict[str, str] = field(default_factory=lambda: {
         "KOSPI": "^KS11",
         "S&P 500": "^GSPC"
-    }
-    ANALYSIS_PERIODS = {
+    })
+    ANALYSIS_PERIODS: Dict[str, int] = field(default_factory=lambda: {
         "1개월": 30,
         "3개월": 90,
         "6개월": 180,
         "1년": 365,
         "3년": 1095,
         "5년": 1825
-    }
+    })
 
 @dataclass
 class BacktestConfig:
@@ -45,28 +45,28 @@ class AppConfig:
     DATA_MIN_PERIODS: int = 252
     
     # 시장 지수 설정
-    MARKET_INDICES: Dict[str, str] = {
+    MARKET_INDICES: Dict[str, str] = field(default_factory=lambda: {
         "KOSPI": "^KS11",
         "S&P 500": "^GSPC",
         "NASDAQ": "^IXIC"
-    }
+    })
     
     # 분석 기간 설정
-    ANALYSIS_PERIODS: Dict[str, int] = {
+    ANALYSIS_PERIODS: Dict[str, int] = field(default_factory=lambda: {
         "1개월": 30,
         "3개월": 90,
         "6개월": 180,
         "1년": 365,
         "3년": 1095,
         "5년": 1825
-    }
+    })
     
     # 리스크 관리 설정
-    RISK_LIMITS = {
+    RISK_LIMITS: Dict[str, float] = field(default_factory=lambda: {
         "max_drawdown": 0.20,
         "var_confidence": 0.95,
         "stop_loss": 0.05,
         "position_size": 0.20
-    }
+    })
 
 config = AppConfig() 
