@@ -20,4 +20,16 @@ html5lib>=1.1
 python-dateutil>=2.8.2
 ta>=0.10.2
 scipy>=1.11.3
-python-dotenv>=1.0.0 
+python-dotenv>=1.0.0
+
+# ORM 및 데이터베이스 관리
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+
+# 설정 관리
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# 테스팅
+pytest>=8.0.0
+pytest-cov>=5.0.0

@@ -9,6 +9,7 @@ from optimization import (
     optimize_risk_parity,
     optimize_markowitz
 )
+from services.data_service import data_service
 
 def portfolio_stats(weights, returns):
     """포트폴리오 통계 계산"""
@@ -111,15 +112,18 @@ def show_asset_allocation():
     with col2:
         end_date = st.date_input("종료일", datetime.now())
     
-    # 데이터 가져오기
+    # 데이터 가져오기 (통합 데이터 서비스 사용)
     data = pd.DataFrame()
     for asset in assets:
         try:
-            stock_data = fdr.DataReader(asset, start_date, end_date)
-            if stock_data.empty:
+            stock_data = data_service.fetch_single_stock(asset, start_date, end_date)
+            if stock_data is None or stock_data.empty:
                 st.error(f"{asset}에 대한 데이터가 없습니다.")
                 return
-            data[asset] = stock_data['Close']
+            if 'Close' in stock_data.columns:
+                data[asset] = stock_data['Close']
+            else:
+                data[asset] = stock_data.iloc[:, 0]
         except Exception as e:
             st.error(f"{asset} 데이터 로드 중 오류 발생: {e}")
             return

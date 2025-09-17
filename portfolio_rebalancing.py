@@ -4,11 +4,13 @@ from typing import Dict, Tuple
 import requests
 from datetime import datetime
 
-# 데이터베이스 모듈 import
-from utils.db import (
-    get_portfolio_holdings, get_portfolio_by_id,
-    update_holding, add_holding_to_portfolio
+# 데이터베이스 및 리포지토리 import (신규 구조)
+from utils.database import get_db
+from repository.holdings_repo import (
+    get_portfolio_holdings, add_holding_to_portfolio, update_holding
 )
+from repository.portfolio_repo import get_portfolio_by_id
+from services.data_service import data_service
 
 def get_exchange_rate():
     """
@@ -206,20 +208,30 @@ def show_portfolio_rebalancing():
     st.subheader("현재 포트폴리오")
     
     # 현재 포트폴리오 로드 버튼
-    if st.session_state.current_portfolio_id:
-        portfolio = get_portfolio_by_id(st.session_state.current_portfolio_id)
+    if st.session_state.get('current_portfolio_id'):
+        # DB 세션 준비
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            portfolio = get_portfolio_by_id(db, st.session_state.current_portfolio_id)
+        finally:
+            db.close()
         if portfolio:
             st.info(f"현재 선택된 포트폴리오: **{portfolio['name']}**")
             if st.button("현재 포트폴리오 정보 로드", use_container_width=True):
                 # 현재 포트폴리오 정보 가져오기
-                holdings = get_portfolio_holdings(st.session_state.current_portfolio_id)
+                db_gen = get_db()
+                db = next(db_gen)
+                try:
+                    holdings = get_portfolio_holdings(db, st.session_state.current_portfolio_id)
+                finally:
+                    db.close()
                 if holdings:
                     # 포지션에 현재 데이터 채우기
                     st.session_state.positions = {}
                     for holding in holdings:
-                        # 현재가 조회 (portfolio_app.py의 fetch_current_price 함수 필요)
-                        from portfolio_app import fetch_current_price
-                        current_price, _ = fetch_current_price(holding['symbol'])
+                        # 현재가 조회 (데이터 서비스 사용)
+                        current_price, _ = data_service.get_current_price(holding['symbol'])
                         if current_price is None:
                             current_price = holding['purchase_price']  # 현재가를 가져올 수 없을 경우 매수가 사용
                         
@@ -540,7 +552,7 @@ def show_portfolio_rebalancing():
                     st.metric("리밸런싱 후 총 가치(원)", f"{new_total_value_usd * usd_krw:,.0f}원")
                 
                 # 리밸런싱 결과를 현재 포트폴리오에 적용하는 기능
-                if st.session_state.current_portfolio_id and st.button(
+                if st.session_state.get('current_portfolio_id') and st.button(
                     "리밸런싱 결과를 현재 포트폴리오에 적용", 
                     use_container_width=True,
                     key="apply_rebalancing"
@@ -549,7 +561,12 @@ def show_portfolio_rebalancing():
                     portfolio_id = st.session_state.current_portfolio_id
                     
                     # 현재 포트폴리오의 모든 종목 정보
-                    current_holdings = get_portfolio_holdings(portfolio_id)
+                    db_gen = get_db()
+                    db = next(db_gen)
+                    try:
+                        current_holdings = get_portfolio_holdings(db, portfolio_id)
+                    finally:
+                        db.close()
                     current_holdings_dict = {h['symbol']: h for h in current_holdings}
                     
                     # 종목별 처리
@@ -559,24 +576,36 @@ def show_portfolio_rebalancing():
                             # 현재 포트폴리오에 있는 종목인 경우 수량 업데이트
                             if asset in current_holdings_dict:
                                 holding = current_holdings_dict[asset]
-                                update_holding(
-                                    holding['id'],
-                                    qty,
-                                    holding['purchase_price'],
-                                    holding['purchase_date'],
-                                    holding['asset_type']
-                                )
+                                db_gen = get_db()
+                                db = next(db_gen)
+                                try:
+                                    update_holding(
+                                        db,
+                                        holding['id'],
+                                        qty,
+                                        holding['purchase_price'],
+                                        holding['purchase_date'],
+                                        holding['asset_type']
+                                    )
+                                finally:
+                                    db.close()
                             # 새로운 종목인 경우 추가
                             else:
                                 from datetime import datetime
-                                add_holding_to_portfolio(
-                                    portfolio_id,
-                                    asset,
-                                    qty,
-                                    price,  # 현재가를 매수가로 사용
-                                    datetime.now().strftime('%Y-%m-%d'),
-                                    'Stock'  # 기본 자산유형으로 Stock 설정
-                                )
+                                db_gen = get_db()
+                                db = next(db_gen)
+                                try:
+                                    add_holding_to_portfolio(
+                                        db,
+                                        portfolio_id,
+                                        asset,
+                                        qty,
+                                        price,  # 현재가를 매수가로 사용
+                                        datetime.now().strftime('%Y-%m-%d'),
+                                        'Stock'  # 기본 자산유형으로 Stock 설정
+                                    )
+                                finally:
+                                    db.close()
                             success_count += 1
                         except Exception as e:
                             st.error(f"{asset} 업데이트 실패: {str(e)}")

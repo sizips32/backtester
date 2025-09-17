@@ -4,6 +4,7 @@ import numpy as np
 import FinanceDataReader as fdr
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+from services.data_service import data_service
 
 # 상수 정의
 class Config:
@@ -78,20 +79,24 @@ def calculate_sortino_ratio(returns, risk_free_rate=0.02):
         return 0
 
 def validate_ticker(ticker):
-    """티커 심볼 검증"""
+    """티커 심볼 검증 (데이터 서비스 사용)"""
     try:
-        df = fdr.DataReader(ticker)
-        return not df.empty
+        end = datetime.now()
+        start = end - timedelta(days=180)
+        df = data_service.fetch_single_stock(ticker, start, end)
+        return df is not None and not df.empty
     except Exception as e:
         st.warning(f"{ticker}: 유효하지 않은 티커 심볼입니다. ({str(e)})")
         return False
 
 @st.cache_data
 def fetch_stock_data(ticker, start_date, end_date):
-    """주식 데이터 조회"""
+    """주식 데이터 조회 (데이터 서비스 사용)"""
     try:
-        df = fdr.DataReader(ticker, start=start_date, end=end_date)
-        return df[['Close']] if not df.empty else pd.DataFrame()
+        df = data_service.fetch_single_stock(ticker, start_date, end_date)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        return df[['Close']] if 'Close' in df.columns else pd.DataFrame(df.iloc[:, 0])
     except Exception as e:
         st.error(f"{ticker} 데이터 다운로드 실패: {str(e)}")
         return pd.DataFrame()
@@ -122,7 +127,7 @@ def show_risk_analysis():
             end_date = datetime.now()
             start_date = end_date - timedelta(days=period_days[period])
 
-            # 벤치마크 지수 데이터 가져오기
+            # 벤치마크 지수 데이터 가져오기 (데이터 서비스 사용)
             try:
                 st.subheader("벤치마크 지수 성과")
                 benchmark_tickers = {
@@ -135,9 +140,10 @@ def show_risk_analysis():
                 benchmark_data = pd.DataFrame()
                 for name, ticker in benchmark_tickers.items():
                     try:
-                        df = fdr.DataReader(ticker, start=start_date, end=end_date)
-                        if not df.empty:
-                            benchmark_data[name] = df['Close']
+                        df = data_service.fetch_single_stock(ticker, start_date, end_date)
+                        if df is not None and not df.empty:
+                            series = df['Close'] if 'Close' in df.columns else df.iloc[:, 0]
+                            benchmark_data[name] = series
                             st.success(f"{name} 데이터 조회 성공")
                     except Exception as e:
                         st.warning(f"{name} 데이터 조회 실패: {str(e)}")

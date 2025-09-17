@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
 import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime, timedelta
@@ -9,10 +8,13 @@ from scipy import stats
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-import FinanceDataReader as fdr
+from sqlalchemy.orm import Session
+from services.data_service import data_service
+from utils.database import get_db
+from repository import holdings_repo
 
 # 설정 시스템 import
-from config.app_config import get_config, get_ui_config, get_trading_config
+from config.app_config import get_config, get_ui_config, get_trading_config, get_validation_config
 
 # 에러 처리 시스템 import
 from utils.error_handler import (
@@ -25,7 +27,8 @@ from utils.error_handler import (
 from utils.validators import (
     DataValidator, DataQualityChecker, PortfolioValidator,
     validate_ticker_input, validate_weights_input, validate_date_input,
-    show_validation_results
+    show_validation_results,
+    validate_ticker
 )
 
 # 로깅 시스템 import
@@ -36,13 +39,11 @@ from utils.logger import (
 
 # 통합 데이터 서비스 import
 from services.data_service import data_service
+from services.analyzer import calculate_portfolio_returns, calculate_risk_metrics
 
 # 데이터베이스 모듈 import
-from utils.db import (
-    create_portfolio, get_all_portfolios, get_portfolio_by_id,
-    update_portfolio, delete_portfolio, add_holding_to_portfolio,
-    get_portfolio_holdings, delete_holding, update_holding
-)
+from utils.database import get_db
+from repository import portfolio_repo, holdings_repo, target_weights_repo, performance_repo
 
 # 모듈 레벨 초기화 코드는 유지하되 함수 내에서도 초기화하도록 합니다
 def initialize_session_state():
@@ -51,7 +52,16 @@ def initialize_session_state():
         st.session_state.current_portfolio_id = None
     
     if 'portfolios' not in st.session_state:
-        st.session_state.portfolios = get_all_portfolios()
+        # DB에서 포트폴리오 목록 초기 로드
+        try:
+            db_gen = get_db()
+            db = next(db_gen)
+            try:
+                st.session_state.portfolios = portfolio_repo.get_all_portfolios(db)
+            finally:
+                db.close()
+        except Exception:
+            st.session_state.portfolios = []
     
     if 'data_cache' not in st.session_state:
         st.session_state.data_cache = {}
@@ -61,7 +71,15 @@ initialize_session_state()
 
 def refresh_portfolios():
     """포트폴리오 목록을 새로고침"""
-    st.session_state.portfolios = get_all_portfolios()
+    try:
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            st.session_state.portfolios = portfolio_repo.get_all_portfolios(db)
+        finally:
+            db.close()
+    except Exception:
+        st.session_state.portfolios = []
 
 def fetch_current_price(stock):
     """실시간 주가를 가져옵니다. (통합 데이터 서비스 사용)"""
@@ -86,235 +104,93 @@ def fetch_historical_data(symbols, start_date, end_date):
     else:
         return pd.DataFrame()
 
-# 포트폴리오 수익률 계산
-def calculate_portfolio_returns(hist_data, weights):
-    """포트폴리오의 일일 수익률을 계산합니다."""
-    # 일일 수익률 계산
-    daily_returns = hist_data.pct_change().dropna()
-    
-    # 포트폴리오 수익률 계산
-    portfolio_returns = (daily_returns * weights).sum(axis=1)
-    
-    return portfolio_returns
-
-# 위험 지표 계산
-def calculate_risk_metrics(portfolio_returns, risk_free_rate=0.0):
-    """포트폴리오의 위험 지표를 계산합니다."""
-    # 연간화 상수
-    annualization_factor = 252  # 거래일 기준
-    
-    # 연간 평균 수익률
-    annual_return = portfolio_returns.mean() * annualization_factor
-    
-    # 연간 표준편차 (변동성)
-    annual_volatility = portfolio_returns.std() * np.sqrt(annualization_factor)
-    
-    # 샤프 비율
-    sharpe_ratio = (
-        (annual_return - risk_free_rate) / annual_volatility 
-        if annual_volatility > 0 else 0
-    )
-    
-    # 최대 낙폭 (MDD)
-    cumulative_returns = (1 + portfolio_returns).cumprod()
-    rolling_max = cumulative_returns.cummax()
-    drawdown = (cumulative_returns - rolling_max) / rolling_max
-    max_drawdown = drawdown.min()
-    
-    # 누적 수익률
-    total_return = cumulative_returns.iloc[-1] - 1
-    
-    # 소티노 비율 (하방 위험 고려)
-    downside_returns = portfolio_returns[portfolio_returns < 0]
-    downside_deviation = downside_returns.std() * np.sqrt(annualization_factor)
-    sortino_ratio = (
-        (annual_return - risk_free_rate) / downside_deviation 
-        if downside_deviation > 0 else 0
-    )
-    
-    return {
-        "연간 기대 수익률": annual_return * 100,
-        "연간 변동성": annual_volatility * 100,
-        "샤프 비율": sharpe_ratio,
-        "소티노 비율": sortino_ratio,
-        "최대 낙폭": max_drawdown * 100,
-        "총 수익률": total_return * 100
-    }
-
 # 포트폴리오 관리 UI
-def show_portfolio_management():
+def show_portfolio_management(db: Session):
     st.subheader("🗂️ 포트폴리오 관리")
     
-    # 탭 구성
     tabs = st.tabs(["포트폴리오 목록", "포트폴리오 생성", "포트폴리오 편집"])
     
-    # 포트폴리오 목록 탭
     with tabs[0]:
-        if not st.session_state.portfolios:
-            st.info("생성된 포트폴리오가 없습니다. '포트폴리오 생성' 탭에서 새 포트폴리오를 생성해보세요.")
+        portfolios = st.session_state.get('portfolios', [])
+        if not portfolios:
+            st.info("생성된 포트폴리오가 없습니다.")
         else:
-            # 포트폴리오 선택 드롭다운
-            portfolio_names = {p['id']: p['name'] for p in st.session_state.portfolios}
+            portfolio_names = {p.id: p.name for p in portfolios}
+            selected_portfolio_id = st.selectbox("포트폴리오 선택", options=list(portfolio_names.keys()), format_func=lambda x: portfolio_names.get(x, ""), key="portfolio_selector")
             
-            selected_portfolio = st.selectbox(
-                "포트폴리오 선택",
-                options=list(portfolio_names.keys()),
-                format_func=lambda x: portfolio_names[x],
-                key="portfolio_selector"
-            )
-            
-            if selected_portfolio != st.session_state.current_portfolio_id:
-                st.session_state.current_portfolio_id = selected_portfolio
+            if selected_portfolio_id != st.session_state.get('current_portfolio_id'):
+                st.session_state.current_portfolio_id = selected_portfolio_id
                 st.rerun()
             
-            # 포트폴리오 세부 정보 표시
-            if selected_portfolio:
-                portfolio = get_portfolio_by_id(selected_portfolio)
+            if selected_portfolio_id:
+                portfolio = portfolio_repo.get_portfolio_by_id(db, selected_portfolio_id)
                 if portfolio:
-                    st.markdown(f"### {portfolio['name']}")
-                    st.write(f"설명: {portfolio['description']}")
-                    st.write(f"생성일: {portfolio['created_at']}")
-                    
-                    # 포트폴리오 삭제 버튼
-                    if st.button("포트폴리오 삭제", key="delete_portfolio"):
-                        if delete_portfolio(selected_portfolio):
+                    st.markdown(f"### {portfolio.name}")
+                    st.write(f"설명: {portfolio.description}")
+                    st.write(f"생성일: {portfolio.created_at}")
+                    if st.button("포트폴리오 삭제", key="delete_portfolio_main"):
+                        if portfolio_repo.delete_portfolio(db, selected_portfolio_id):
                             st.session_state.current_portfolio_id = None
-                            refresh_portfolios()
+                            st.session_state.portfolios = portfolio_repo.get_all_portfolios(db)
                             st.success("포트폴리오가 삭제되었습니다.")
                             st.rerun()
                         else:
                             st.error("포트폴리오 삭제 중 오류가 발생했습니다.")
-    
-    # 포트폴리오 생성 탭
+
     with tabs[1]:
-        st.write("새 포트폴리오 생성")
         with st.form("create_portfolio_form"):
             name = st.text_input("포트폴리오 이름")
             description = st.text_area("설명 (선택사항)")
-            
-            submitted = st.form_submit_button("포트폴리오 생성")
-            if submitted:
-                if not name:
-                    st.error("포트폴리오 이름을 입력해주세요.")
+            if st.form_submit_button("포트폴리오 생성"):
+                if name:
+                    new_p = portfolio_repo.create_portfolio(db, name, description)
+                    st.session_state.portfolios = portfolio_repo.get_all_portfolios(db)
+                    st.session_state.current_portfolio_id = new_p.id
+                    st.success(f"'{name}' 포트폴리오가 생성되었습니다.")
+                    st.rerun()
                 else:
-                    new_portfolio_id = create_portfolio(name, description)
-                    if new_portfolio_id:
-                        refresh_portfolios()
-                        st.session_state.current_portfolio_id = new_portfolio_id
-                        st.success(f"'{name}' 포트폴리오가 생성되었습니다.")
-                        st.rerun()
-                    else:
-                        st.error("포트폴리오 생성 중 오류가 발생했습니다.")
-    
-    # 포트폴리오 편집 탭
+                    st.error("포트폴리오 이름을 입력해주세요.")
+
     with tabs[2]:
-        if not st.session_state.portfolios:
-            st.info("생성된 포트폴리오가 없습니다. '포트폴리오 생성' 탭에서 새 포트폴리오를 생성해보세요.")
+        portfolios = st.session_state.get('portfolios', [])
+        if not portfolios:
+            st.info("편집할 포트폴리오가 없습니다.")
             return
 
-        # 포트폴리오 선택 드롭다운
-        portfolio_names = {p['id']: p['name'] for p in st.session_state.portfolios}
-        selected_portfolio_id = st.selectbox(
-            "수정할 포트폴리오 선택",
-            options=list(portfolio_names.keys()),
-            format_func=lambda x: portfolio_names[x],
-            key="edit_portfolio_selector"
-        )
+        portfolio_names = {p.id: p.name for p in portfolios}
+        selected_portfolio_id = st.selectbox("수정할 포트폴리오 선택", options=list(portfolio_names.keys()), format_func=lambda x: portfolio_names.get(x, ""), key="edit_portfolio_selector")
         
         if selected_portfolio_id:
-            portfolio = get_portfolio_by_id(selected_portfolio_id)
+            portfolio = portfolio_repo.get_portfolio_by_id(db, selected_portfolio_id)
             if portfolio:
-                st.write("---")
-                
-                # 현재 정보 표시
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    st.markdown(f"### {portfolio['name']}")
-                with col2:
-                    st.info(
-                        f"생성일: {portfolio['created_at']}\n"
-                        f"마지막 수정일: {portfolio['updated_at']}"
-                    )
-                
-                # 수정 폼
                 with st.form("edit_portfolio_form"):
-                    st.write("#### 포트폴리오 정보 수정")
-                    
-                    name = st.text_input(
-                        "포트폴리오 이름",
-                        value=portfolio['name'],
-                        help="포트폴리오의 새 이름을 입력하세요"
-                    )
-                    
-                    description = st.text_area(
-                        "설명",
-                        value=portfolio['description'] or "",
-                        height=100,
-                        help="포트폴리오에 대한 설명을 입력하세요"
-                    )
-                    
-                    col1, col2, col3 = st.columns([1, 1, 1])
-                    with col2:
-                        submitted = st.form_submit_button(
-                            "변경사항 저장",
-                            use_container_width=True,
-                            type="primary"
-                        )
-                    
-                    if submitted:
-                        if not name:
-                            st.error("포트폴리오 이름을 입력해주세요.")
-                        elif name == portfolio['name'] and description == portfolio['description']:
-                            st.warning("변경된 내용이 없습니다.")
+                    name = st.text_input("포트폴리오 이름", value=portfolio.name)
+                    description = st.text_area("설명", value=portfolio.description or "")
+                    if st.form_submit_button("변경사항 저장"):
+                        if name:
+                            portfolio_repo.update_portfolio(db, portfolio.id, name, description)
+                            st.session_state.portfolios = portfolio_repo.get_all_portfolios(db)
+                            st.success("포트폴리오가 업데이트되었습니다.")
+                            st.rerun()
                         else:
-                            try:
-                                if update_portfolio(
-                                    portfolio['id'],
-                                    name,
-                                    description
-                                ):
-                                    refresh_portfolios()
-                                    st.success(
-                                        f"'{portfolio['name']}' 포트폴리오가 "
-                                        f"'{name}'(으)로 업데이트되었습니다."
-                                    )
-                                    st.rerun()
-                                else:
-                                    st.error(
-                                        "포트폴리오 업데이트 중 "
-                                        "오류가 발생했습니다."
-                                    )
-                            except Exception as e:
-                                st.error(
-                                    "포트폴리오 업데이트 중 "
-                                    f"오류 발생: {str(e)}"
-                                )
+                            st.error("포트폴리오 이름을 입력해주세요.")
                 
-                # 포트폴리오 삭제 섹션
-                st.write("---")
-                st.write("#### 포트폴리오 삭제")
-                st.warning(
-                    "⚠️ 주의: 포트폴리오를 삭제하면 모든 보유 종목 정보도 함께 삭제됩니다. "
-                    "이 작업은 되돌릴 수 없습니다."
-                )
-                
-                if st.button(
-                    "포트폴리오 삭제",
-                    key="delete_portfolio_edit",
-                    type="secondary"
-                ):
-                    if delete_portfolio(portfolio['id']):
-                        st.session_state.current_portfolio_id = None
-                        refresh_portfolios()
-                        st.success(f"'{portfolio['name']}' 포트폴리오가 삭제되었습니다.")
-                        st.rerun()
-                    else:
-                        st.error("포트폴리오 삭제 중 오류가 발생했습니다.")
-        else:
-            st.info("편집할 포트폴리오를 선택해주세요.")
+                if st.button("포트폴리오 삭제", key="delete_portfolio_edit"):
+                    portfolio_repo.delete_portfolio(db, portfolio.id)
+                    st.session_state.current_portfolio_id = None
+                    st.session_state.portfolios = portfolio_repo.get_all_portfolios(db)
+                    st.success("포트폴리오가 삭제되었습니다.")
+                    st.rerun()
+
+                current_weights = target_weights_repo.get_portfolio_target_weights(db, portfolio.id)
+                edited_df = st.data_editor(pd.DataFrame([{"종목": sym, "비중(%)": w*100} for sym, w in current_weights.items()] or [{"종목": "", "비중(%)": 0.0}]), num_rows="dynamic")
+                if st.button("목표 비중 저장"):
+                    weights = {row['종목']: float(row['비중(%)'])/100.0 for _, row in edited_df.iterrows() if row['종목']}
+                    target_weights_repo.set_portfolio_target_weights(db, portfolio.id, weights)
+                    st.success("목표 비중이 저장되었습니다.")
 
 # 종목 추가 함수
-def add_investment(portfolio_id, symbol, quantity, purchase_price, purchase_date, asset_type):
+def add_investment(db: Session, portfolio_id, symbol, quantity, purchase_price, purchase_date, asset_type):
     # 사용자 액션 로깅
     log_user_action("add_investment", 
                    portfolio_id=portfolio_id, 
@@ -322,8 +198,9 @@ def add_investment(portfolio_id, symbol, quantity, purchase_price, purchase_date
                    asset_type=asset_type)
     
     # 종목 코드 검증
-    if not validate_ticker_input(symbol):
-        portfolio_logger.log_validation_result("ticker_validation", False, [f"Invalid ticker: {symbol}"])
+    valid, msg = validate_ticker(symbol)
+    if not valid:
+        st.sidebar.error(f"{symbol}: {msg}")
         return False
     
     # 자산 데이터 검증
@@ -332,23 +209,14 @@ def add_investment(portfolio_id, symbol, quantity, purchase_price, purchase_date
     )
     
     if not asset_valid:
-        portfolio_logger.log_validation_result("asset_data_validation", False, asset_errors)
         for error in asset_errors:
             st.sidebar.error(error)
         return False
 
-    # 주가 정보 가져오기
+    # 데이터베이스에 저장
     try:
-        current_price, error_msg = fetch_current_price(symbol)
-        if current_price is None:
-            log_data_operation("fetch_current_price", False, symbol=symbol, error=error_msg)
-            st.sidebar.error(error_msg)
-            return False
-        else:
-            log_data_operation("fetch_current_price", True, symbol=symbol, price=current_price)
-
-        # 데이터베이스에 저장
-        holding_id = add_holding_to_portfolio(
+        holding = holdings_repo.add_holding_to_portfolio(
+            db,
             portfolio_id, 
             symbol, 
             quantity, 
@@ -357,37 +225,17 @@ def add_investment(portfolio_id, symbol, quantity, purchase_price, purchase_date
             asset_type
         )
         
-        if holding_id:
-            portfolio_logger.log_portfolio_operation(
-                "add_holding", 
-                portfolio_id=portfolio_id,
-                symbols=[symbol],
-                success=True,
-                details={"quantity": quantity, "price": purchase_price}
-            )
+        if holding:
             return True
         else:
-            portfolio_logger.log_portfolio_operation(
-                "add_holding", 
-                portfolio_id=portfolio_id,
-                symbols=[symbol],
-                success=False,
-                details={"error": "Database insert failed"}
-            )
             st.sidebar.error("종목 추가 중 오류가 발생했습니다.")
             return False
-
     except Exception as e:
-        portfolio_logger.log_exception(e, {
-            "function": "add_investment",
-            "portfolio_id": portfolio_id,
-            "symbol": symbol
-        })
-        st.sidebar.error(f"종목 정보를 가져오는 중 오류가 발생했습니다: {str(e)}")
+        st.sidebar.error(f"종목 추가 중 데이터베이스 오류 발생: {str(e)}")
         return False
 
 # 종목 편집 함수
-def edit_investment(holding_id, quantity, purchase_price, purchase_date, asset_type):
+def edit_investment(db: Session, holding_id, quantity, purchase_price, purchase_date, asset_type):
     # 입력값 검증
     error_message = None
     if quantity <= 0:
@@ -401,7 +249,8 @@ def edit_investment(holding_id, quantity, purchase_price, purchase_date, asset_t
 
     # 데이터베이스에 업데이트
     try:
-        success = update_holding(
+        updated = holdings_repo.update_holding(
+            db,
             holding_id, 
             quantity, 
             purchase_price, 
@@ -409,7 +258,7 @@ def edit_investment(holding_id, quantity, purchase_price, purchase_date, asset_t
             asset_type
         )
         
-        if success:
+        if updated:
             return True
         else:
             st.error("종목 수정 중 오류가 발생했습니다.")
@@ -420,16 +269,16 @@ def edit_investment(holding_id, quantity, purchase_price, purchase_date, asset_t
         return False
 
 # 포트폴리오 표시
-def show_portfolio_holdings():
+def show_portfolio_holdings(db: Session):
     if st.session_state.current_portfolio_id:
         st.header('포트폴리오 보유 종목')
         
         # 보유 종목 조회
-        holdings = get_portfolio_holdings(st.session_state.current_portfolio_id)
+        holdings = holdings_repo.get_portfolio_holdings(db, st.session_state.current_portfolio_id)
         
         if holdings:
             # 티커 목록 추출 및 표시
-            tickers = [holding['symbol'] for holding in holdings]
+            tickers = [holding.symbol for holding in holdings]
             ticker_string = ", ".join(tickers)
             
             st.subheader("티커 목록")
@@ -451,7 +300,7 @@ def show_portfolio_holdings():
             
             with st.spinner("현재가를 가져오는 중..."):
                 for holding in holdings:
-                    symbol = holding['symbol']
+                    symbol = holding.symbol
                     current_price = None
                     error_msg = None
                     
@@ -462,62 +311,56 @@ def show_portfolio_holdings():
                         symbol.endswith('.KQ')
                     )
                     
-                    if is_korean:
-                        try:
-                            clean_symbol = symbol.replace('.KS', '').replace('.KQ', '')
-                            df = fdr.DataReader(clean_symbol)
-                            if len(df) > 0:
-                                current_price = df['Close'].iloc[-1]
-                        except Exception:
-                            pass
-                    
-                    # fdr로 실패했거나 해외 주식인 경우
-                    if current_price is None:
-                        if is_korean and not (
-                            symbol.endswith('.KS') or 
-                            symbol.endswith('.KQ')
-                        ):
-                            for suffix in ['.KS', '.KQ']:
-                                test_symbol = f"{symbol}{suffix}"
-                                price, msg = fetch_current_price(test_symbol)
-                                if price is not None:
-                                    current_price = price
-                                    symbol = test_symbol
-                                    break
-                        
-                        if current_price is None:
-                            current_price, error_msg = fetch_current_price(symbol)
+                    # 통합 데이터 서비스 기반 현재가 조회 (필요 시 접미사 시도)
+                    if is_korean and not (symbol.endswith('.KS') or symbol.endswith('.KQ')):
+                        for suffix in ['.KS', '.KQ']:
+                            test_symbol = f"{symbol}{suffix}"
+                            price, msg = fetch_current_price(test_symbol)
+                            if price is not None:
+                                current_price = price
+                                symbol = test_symbol
+                                break
                     
                     if current_price is None:
-                        st.warning(
-                            f"{symbol}: {error_msg or '가격 정보를 가져올 수 없습니다.'}"
-                        )
-                        current_price = 0
+                        current_price, error_msg = fetch_current_price(symbol)
                     
-                    market_value = holding['quantity'] * current_price
+                    # 가격 값 정규화: None/NaN/비수치 → 0 으로 처리해 합계가 NaN이 되지 않도록 함
+                    try:
+                        if current_price is None or (isinstance(current_price, (float, int)) and not np.isfinite(current_price)):
+                            if error_msg:
+                                st.warning(f"{symbol}: {error_msg}")
+                            current_price = 0.0
+                        else:
+                            current_price = float(current_price)
+                    except Exception:
+                        if error_msg:
+                            st.warning(f"{symbol}: {error_msg}")
+                        current_price = 0.0
+                    
+                    market_value = holding.quantity * current_price
                     gain_loss = (
                         market_value - 
-                        (holding['quantity'] * holding['purchase_price'])
+                        (holding.quantity * holding.purchase_price)
                     )
                     gain_loss_pct = (
                         (gain_loss / 
-                         (holding['quantity'] * holding['purchase_price'])) * 100 
-                        if holding['purchase_price'] > 0 else 0
+                         (holding.quantity * holding.purchase_price)) * 100 
+                        if holding.purchase_price > 0 else 0
                     )
                     
                     total_value += market_value
                     
                     holdings_data.append({
-                        'ID': holding['id'],
+                        'ID': holding.id,
                         '종목': symbol,
-                        '보유수량': holding['quantity'],
-                        '매수가': holding['purchase_price'],
+                        '보유수량': holding.quantity,
+                        '매수가': holding.purchase_price,
                         '현재가': current_price,
                         '시장가치': market_value,
                         '손익': gain_loss,
                         '손익(%)': gain_loss_pct,
-                        '자산유형': holding['asset_type'],
-                        '매수일': holding['purchase_date'] or '정보 없음'
+                        '자산유형': holding.asset_type,
+                        '매수일': holding.purchase_date or '정보 없음'
                     })
             
             # 데이터프레임 생성
@@ -550,7 +393,7 @@ def show_portfolio_holdings():
                 st.metric("포트폴리오 총 가치", f"${total_value:,.2f}")
                 
                 # 순자산가치(NAV) 계산 및 표시
-                total_shares = sum([holding['quantity'] for holding in holdings])
+                total_shares = sum([holding.quantity for holding in holdings])
                 nav = total_value / total_shares if total_shares > 0 else 0
                 st.metric("NAV (순자산가치)", f"${nav:,.2f}")
                 
@@ -582,7 +425,7 @@ def show_portfolio_holdings():
             
             with col2:
                 # 포트폴리오 수익률 정보
-                total_investment = sum([holding['quantity'] * holding['purchase_price'] for holding in holdings])
+                total_investment = sum([holding.quantity * holding.purchase_price for holding in holdings])
                 total_gain_loss = total_value - total_investment
                 total_gain_loss_pct = (total_gain_loss / total_investment) * 100 if total_investment > 0 else 0
                 
@@ -624,7 +467,263 @@ def show_portfolio_holdings():
                 )])
                 fig.update_layout(height=500)
                 st.plotly_chart(fig, use_container_width=True)
-            
+
+            # 성과 이력(저장된 DB) 섹션
+            st.markdown("---")
+            st.subheader("📈 성과 이력 (DB)")
+
+            # 모든 성과를 불러와 기간 선택에 사용
+            all_perf_rows = performance_repo.get_portfolio_performance(db, st.session_state.current_portfolio_id)
+            if not all_perf_rows:
+                st.info("저장된 성과 이력이 없습니다. 백테스트 결과 화면에서 '성과 기록 저장'을 먼저 수행하세요.")
+            else:
+                base_df = pd.DataFrame(all_perf_rows)
+                base_df['date'] = pd.to_datetime(base_df['date'])
+                base_df = base_df.sort_values('date')
+                base_df['total_value'] = pd.to_numeric(base_df['total_value'], errors='coerce')
+                if 'daily_return' in base_df.columns:
+                    base_df['daily_return'] = pd.to_numeric(base_df['daily_return'], errors='coerce')
+
+                min_d = base_df['date'].min().date()
+                max_d = base_df['date'].max().date()
+
+                # 기간 선택 + 사용자 지정
+                period = st.selectbox(
+                    "기간",
+                    options=["1개월", "3개월", "6개월", "1년", "3년", "전체", "사용자 지정"],
+                    index=5,
+                    key="perf_history_period"
+                )
+
+                start_dt, end_dt = None, None
+                if period == "전체":
+                    start_dt, end_dt = min_d, max_d
+                elif period == "사용자 지정":
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        start_dt = st.date_input("시작일", value=max(min_d, max_d - timedelta(days=180)), min_value=min_d, max_value=max_d, key="perf_start_date")
+                    with c2:
+                        end_dt = st.date_input("종료일", value=max_d, min_value=min_d, max_value=max_d, key="perf_end_date")
+                    if start_dt > end_dt:
+                        st.warning("시작일은 종료일보다 이전이어야 합니다.")
+                        start_dt, end_dt = end_dt, start_dt
+                else:
+                    days_map = {"1개월": 30, "3개월": 90, "6개월": 180, "1년": 365, "3년": 365*3}
+                    end_dt = max_d
+                    start_dt = max(min_d, end_dt - timedelta(days=days_map[period]))
+
+                # 기간 필터링
+                perf_df = base_df[(base_df['date'] >= pd.to_datetime(start_dt)) & (base_df['date'] <= pd.to_datetime(end_dt))].copy()
+                if perf_df.empty:
+                    st.info("선택한 기간에 데이터가 없습니다.")
+                else:
+                    # 총가치 라인 차트
+                    fig_tv = go.Figure()
+                    fig_tv.add_trace(go.Scatter(
+                        x=perf_df['date'], y=perf_df['total_value'], mode='lines', name='총 가치'
+                    ))
+                    fig_tv.update_layout(
+                        title='총 가치 추이', xaxis_title='날짜', yaxis_title='총 가치', height=350
+                    )
+                    st.plotly_chart(fig_tv, use_container_width=True)
+
+                    # 일간 수익률 막대 차트(가능 시)
+                    has_dr = 'daily_return' in perf_df.columns and perf_df['daily_return'].notna().any()
+                    if has_dr:
+                        fig_dr = go.Figure()
+                        fig_dr.add_trace(go.Bar(
+                            x=perf_df['date'], y=perf_df['daily_return']*100.0, name='일간 수익률(%)',
+                            marker_color=['#2ca02c' if v >= 0 else '#d62728' for v in perf_df['daily_return'].fillna(0)]
+                        ))
+                        fig_dr.update_layout(
+                            title='일간 수익률(%)', xaxis_title='날짜', yaxis_title='수익률(%)', height=250
+                        )
+                        st.plotly_chart(fig_dr, use_container_width=True)
+
+                    # 요약 메트릭 계산
+                    try:
+                        # 인덱스화 (날짜 인덱스 사용)
+                        tv_series = perf_df.set_index('date')['total_value']
+                        idx = tv_series / tv_series.iloc[0]
+                        daily_ret = perf_df.set_index('date')['daily_return'].dropna() if has_dr else idx.pct_change().dropna()
+                        n = len(daily_ret)
+                        ann_factor = 252
+                        total_return = idx.iloc[-1] - 1
+                        ann_return = (1 + total_return) ** (ann_factor / max(n, 1)) - 1 if n > 0 else 0
+                        ann_vol = daily_ret.std() * np.sqrt(ann_factor) if n > 1 else 0
+                        # MDD
+                        roll_max = idx.cummax()
+                        drawdown = idx / roll_max - 1
+                        mdd = drawdown.min() if len(drawdown) else 0
+                        # Sharpe (연 환산, 무위험 수익률 config 사용)
+                        from config.app_config import get_trading_config
+                        rf = get_trading_config().risk_free_rate
+                        sharpe = (ann_return - rf) / ann_vol if ann_vol > 0 else 0
+                        # VaR/CVaR (95%)
+                        if n > 0:
+                            var_95 = np.percentile(daily_ret.values, 5)
+                            cvar_95 = daily_ret[daily_ret <= var_95].mean() if (daily_ret <= var_95).any() else 0.0
+                        else:
+                            var_95, cvar_95 = 0.0, 0.0
+                        # 승률
+                        win_rate = float((daily_ret > 0).mean()) if n > 0 else 0.0
+
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("총 수익률", f"{total_return*100:.2f}%")
+                        col2.metric("연환산 수익률", f"{ann_return*100:.2f}%")
+                        col3.metric("연환산 변동성", f"{ann_vol*100:.2f}%")
+                        col4.metric("MDD", f"{mdd*100:.2f}%")
+                        # 두 번째 줄
+                        col5, col6 = st.columns(2)
+                        col5.metric("Sharpe Ratio", f"{sharpe:.3f}")
+                        if mdd and mdd != 0:
+                            calmar = ann_return / abs(mdd)
+                            col6.metric("Calmar Ratio", f"{calmar:.3f}")
+
+                        # 추가 메트릭 (VaR/CVaR/승률)
+                        col7, col8, col9 = st.columns(3)
+                        col7.metric("VaR (95%)", f"{var_95*100:.2f}%")
+                        col8.metric("CVaR (95%)", f"{(cvar_95 if not np.isnan(cvar_95) else 0)*100:.2f}%")
+                        col9.metric("승률", f"{win_rate*100:.1f}%")
+
+                        # 월별 성과 요약 표
+                        monthly_summary = (1 + daily_ret).groupby(pd.Grouper(freq='ME')).prod() - 1
+                        if not monthly_summary.empty:
+                            ms_df = monthly_summary.to_frame(name='월 수익률').reset_index()
+                            ms_df['연도'] = ms_df['date'].dt.year
+                            ms_df['월'] = ms_df['date'].dt.month
+                            ms_df['월 수익률'] = (ms_df['월 수익률'] * 100).round(2)
+                            st.dataframe(
+                                ms_df[['연도','월','월 수익률']],
+                                use_container_width=True,
+                                hide_index=True
+                            )
+
+                        # CSV 다운로드 버튼들
+                        st.write("")
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            csv_hist = perf_df[['date','total_value'] + (['daily_return'] if has_dr else [])].copy()
+                            csv_bytes = csv_hist.to_csv(index=False).encode('utf-8')
+                            st.download_button(
+                                "성과 이력 CSV 다운로드",
+                                data=csv_bytes,
+                                file_name=f"performance_history_{start_dt}_{end_dt}.csv",
+                                mime='text/csv'
+                            )
+                        with c2:
+                            summary_df = pd.DataFrame([
+                                {"항목": "총 수익률", "값": total_return},
+                                {"항목": "연환산 수익률", "값": ann_return},
+                                {"항목": "연환산 변동성", "값": ann_vol},
+                                {"항목": "MDD", "값": mdd},
+                                {"항목": "Sharpe Ratio", "값": sharpe},
+                                {"항목": "VaR (95%)", "값": var_95},
+                                {"항목": "CVaR (95%)", "값": float(0 if np.isnan(cvar_95) else cvar_95)},
+                                {"항목": "승률", "값": win_rate},
+                            ])
+                            csv_sum = summary_df.to_csv(index=False).encode('utf-8')
+                            st.download_button(
+                                "요약 메트릭 CSV 다운로드",
+                                data=csv_sum,
+                                file_name=f"performance_summary_{start_dt}_{end_dt}.csv",
+                                mime='text/csv'
+                            )
+                    except Exception as e:
+                        st.warning(f"요약 메트릭 계산 중 오류: {str(e)}")
+
+                    # 벤치마크 비교 (상대 성과)
+                    st.write("")
+                    with st.expander("벤치마크 비교", expanded=False):
+                        bm_name_map = {
+                            "S&P500": ["US500", "^GSPC"],
+                            "KOSPI": ["KS11"],
+                            "Nikkei225": ["N225"],
+                        }
+                        bm_options = list(bm_name_map.keys())
+                        selected_bm = st.multiselect("벤치마크(복수 선택 가능)", bm_options, default=["S&P500"], key="perf_bm_multi")
+                        custom_input = st.text_input(
+                            "사용자 정의 심볼 (콤마로 여러 개)",
+                            value="",
+                            help="예: ^GSPC, SPY, 005930.KS",
+                            key="perf_bm_custom_multi"
+                        )
+                        custom_syms = [s.strip() for s in custom_input.split(',') if s.strip()]
+
+                        # 벤치마크 시리즈 수집: {label: pd.Series}
+                        bm_series_map = {}
+                        # 내장 선택
+                        for name in selected_bm:
+                            for sym in bm_name_map[name]:
+                                try:
+                                    df_bm = data_service.fetch_single_stock(sym, pd.to_datetime(start_dt), pd.to_datetime(end_dt))
+                                    if df_bm is not None and not df_bm.empty:
+                                        s = df_bm['Close'] if 'Close' in df_bm.columns else df_bm.iloc[:,0]
+                                        bm_series_map[name] = s.copy()
+                                        break
+                                except Exception:
+                                    continue
+                        # 사용자 정의: 각 심볼을 별도 라인으로 추가
+                        for sym in custom_syms:
+                            try:
+                                df_bm = data_service.fetch_single_stock(sym, pd.to_datetime(start_dt), pd.to_datetime(end_dt))
+                                if df_bm is not None and not df_bm.empty:
+                                    s = df_bm['Close'] if 'Close' in df_bm.columns else df_bm.iloc[:,0]
+                                    bm_series_map[sym] = s.copy()
+                            except Exception:
+                                continue
+
+                        if not bm_series_map:
+                            st.info("선택된 벤치마크 데이터를 불러올 수 없습니다.")
+                        else:
+                            # 누적 수익률 비교 멀티라인
+                            fig_cmp = go.Figure()
+                            fig_cmp.add_trace(go.Scatter(x=tv_series.index, y=(tv_series/tv_series.iloc[0]-1)*100, name='포트폴리오(%)'))
+                            # 상대 메트릭 집계
+                            rel_rows = []
+                            for label, s in bm_series_map.items():
+                                s.index = pd.to_datetime(s.index)
+                                common_idx = s.index.intersection(tv_series.index)
+                                if len(common_idx) < 3:
+                                    continue
+                                pv_idx = tv_series.loc[common_idx] / tv_series.loc[common_idx].iloc[0]
+                                bm_idx = s.loc[common_idx] / s.loc[common_idx].iloc[0]
+                                fig_cmp.add_trace(go.Scatter(x=common_idx, y=(bm_idx-1)*100, name=f'{label}(%)'))
+
+                                # 상대 메트릭 계산
+                                pv_dr = pv_idx.pct_change().dropna()
+                                bm_dr = bm_idx.pct_change().dropna()
+                                com = pv_dr.index.intersection(bm_dr.index)
+                                pv_dr = pv_dr.loc[com]
+                                bm_dr = bm_dr.loc[com]
+                                ann_factor = 252
+                                pv_ann = pv_dr.mean()*ann_factor
+                                bm_ann = bm_dr.mean()*ann_factor
+                                excess = pv_ann - bm_ann
+                                corr = pv_dr.corr(bm_dr)
+                                te = (pv_dr - bm_dr).std() * np.sqrt(ann_factor)
+                                ir = (excess / te) if te > 0 else 0
+                                rel_rows.append({
+                                    '벤치마크': label,
+                                    '초과 수익률(연)': excess,
+                                    '상관계수': corr,
+                                    '추적오차(연)': te,
+                                    '정보비율': ir
+                                })
+
+                            fig_cmp.update_layout(title='누적 수익률 비교(%)', xaxis_title='날짜', yaxis_title='수익률(%)', height=350)
+                            st.plotly_chart(fig_cmp, use_container_width=True)
+
+                            if rel_rows:
+                                rel_df = pd.DataFrame(rel_rows)
+                                # 포맷팅 뷰 제공
+                                display_rel = rel_df.copy()
+                                display_rel['초과 수익률(연)'] = (display_rel['초과 수익률(연)']*100).map(lambda x: f"{x:.2f}%")
+                                display_rel['추적오차(연)'] = (display_rel['추적오차(연)']*100).map(lambda x: f"{x:.2f}%")
+                                display_rel['상관계수'] = display_rel['상관계수'].map(lambda x: f"{x:.3f}")
+                                display_rel['정보비율'] = display_rel['정보비율'].map(lambda x: f"{x:.3f}")
+                                st.dataframe(display_rel, use_container_width=True, hide_index=True)
+
             # 종목 관리 섹션
             st.markdown("---")
             st.subheader("📋 종목 관리")
@@ -648,6 +747,7 @@ def show_portfolio_holdings():
                     
                     if submitted:
                         if add_investment(
+                            db,
                             st.session_state.current_portfolio_id,
                             symbol,
                             quantity,
@@ -661,12 +761,12 @@ def show_portfolio_holdings():
             # 종목 수정
             with col2:
                 st.markdown("#### ✏️ 종목 수정")
-                holdings = get_portfolio_holdings(st.session_state.current_portfolio_id)
+                holdings = holdings_repo.get_portfolio_holdings(db, st.session_state.current_portfolio_id)
                 if holdings:
                     with st.form("edit_investment_form"):
                         # 수정할 종목 선택
                         holdings_dict = {
-                            h['id']: f"{h['symbol']} ({h['quantity']}주, ${h['purchase_price']:.2f})" 
+                            h.id: f"{h.symbol} ({h.quantity}주, ${h.purchase_price:.2f})" 
                             for h in holdings
                         }
                         selected_holding_id = st.selectbox(
@@ -678,7 +778,7 @@ def show_portfolio_holdings():
                         
                         # 선택된 종목 정보 가져오기
                         selected_holding = next(
-                            (h for h in holdings if h['id'] == selected_holding_id), 
+                            (h for h in holdings if h.id == selected_holding_id), 
                             None
                         )
                         
@@ -686,28 +786,28 @@ def show_portfolio_holdings():
                             quantity = st.number_input(
                                 '수량',
                                 min_value=0.0,
-                                value=float(selected_holding['quantity']),
+                                value=float(selected_holding.quantity),
                                 key='edit_quantity'
                             )
                             purchase_price = st.number_input(
                                 '매수가',
                                 min_value=0.0,
-                                value=float(selected_holding['purchase_price']),
+                                value=float(selected_holding.purchase_price),
                                 key='edit_price'
                             )
                             purchase_date = st.date_input(
                                 '매수일',
                                 value=datetime.strptime(
-                                    selected_holding['purchase_date'], 
+                                    selected_holding.purchase_date, 
                                     '%Y-%m-%d'
-                                ) if selected_holding['purchase_date'] else datetime.now(),
+                                ) if selected_holding.purchase_date else datetime.now(),
                                 key='edit_date'
                             )
                             asset_type = st.selectbox(
                                 '자산 유형',
                                 ['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity'],
                                 index=['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity'].index(
-                                    selected_holding['asset_type']
+                                    selected_holding.asset_type
                                 ),
                                 key='edit_asset_type'
                             )
@@ -728,6 +828,7 @@ def show_portfolio_holdings():
                             
                             if submitted:
                                 if edit_investment(
+                                    db,
                                     selected_holding_id,
                                     quantity,
                                     purchase_price,
@@ -738,7 +839,7 @@ def show_portfolio_holdings():
                                     st.rerun()
                             
                             if delete:
-                                if delete_holding(selected_holding_id):
+                                if holdings_repo.delete_holding(db, selected_holding_id):
                                     st.success('종목이 성공적으로 삭제되었습니다!')
                                     st.rerun()
                 else:
@@ -751,7 +852,7 @@ def show_portfolio_holdings():
             st.subheader("📝 포트폴리오 수정")
             
             # 현재 선택된 포트폴리오 정보 가져오기
-            current_portfolio = get_portfolio_by_id(st.session_state.current_portfolio_id)
+            current_portfolio = portfolio_repo.get_portfolio_by_id(db, st.session_state.current_portfolio_id)
             
             if current_portfolio:
                 with st.expander("포트폴리오 정보 수정", expanded=True):
@@ -760,21 +861,21 @@ def show_portfolio_holdings():
                         col1, col2 = st.columns([3, 1])
                         
                         with col1:
-                            st.write(f"**현재 포트폴리오**: {current_portfolio['name']}")
+                            st.write(f"**현재 포트폴리오**: {current_portfolio.name}")
                         
                         with col2:
-                            st.write(f"생성일: {current_portfolio['created_at']}")
+                            st.write(f"생성일: {current_portfolio.created_at}")
                         
                         # 포트폴리오 이름 및 설명 입력 필드
                         new_name = st.text_input(
                             "포트폴리오 이름",
-                            value=current_portfolio['name'],
+                            value=current_portfolio.name,
                             key="edit_current_portfolio_name"
                         )
                         
                         new_description = st.text_area(
                             "포트폴리오 설명",
-                            value=current_portfolio['description'] or "",
+                            value=current_portfolio.description or "",
                             key="edit_current_portfolio_desc"
                         )
                         
@@ -798,15 +899,17 @@ def show_portfolio_holdings():
                     if submit_button:
                         if not new_name:
                             st.error("포트폴리오 이름을 입력해주세요.")
-                        elif new_name == current_portfolio['name'] and new_description == current_portfolio['description']:
+                        elif new_name == current_portfolio.name and new_description == current_portfolio.description:
                             st.warning("변경된 내용이 없습니다.")
                         else:
                             try:
-                                if update_portfolio(
-                                    current_portfolio['id'],
+                                updated = portfolio_repo.update_portfolio(
+                                    db,
+                                    current_portfolio.id,
                                     new_name,
                                     new_description
-                                ):
+                                )
+                                if updated:
                                     refresh_portfolios()
                                     st.success(
                                         f"포트폴리오가 '{new_name}'(으)로 업데이트되었습니다."
@@ -826,10 +929,10 @@ def show_portfolio_holdings():
                         
                         with confirm_col1:
                             if st.button("예, 삭제합니다", key="confirm_delete_portfolio", type="primary"):
-                                if delete_portfolio(current_portfolio['id']):
+                                if portfolio_repo.delete_portfolio(db, current_portfolio.id):
                                     st.session_state.current_portfolio_id = None
                                     refresh_portfolios()
-                                    st.success(f"'{current_portfolio['name']}' 포트폴리오가 삭제되었습니다.")
+                                    st.success(f"'{current_portfolio.name}' 포트폴리오가 삭제되었습니다.")
                                     st.rerun()
                                 else:
                                     st.error("포트폴리오 삭제 중 오류가 발생했습니다.")
@@ -850,7 +953,16 @@ def show_portfolio_analysis():
         return
         
     # 보유 종목 조회
-    holdings = get_portfolio_holdings(st.session_state.current_portfolio_id)
+    try:
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            holdings = holdings_repo.get_portfolio_holdings(db, st.session_state.current_portfolio_id)
+        finally:
+            db.close()
+    except Exception as e:
+        st.error(f"보유 종목 조회 중 오류가 발생했습니다: {e}")
+        return
     
     if not holdings:
         st.info("이 포트폴리오에는 아직 종목이 없습니다. 포트폴리오에 종목을 먼저 추가해주세요.")
@@ -876,7 +988,7 @@ def show_portfolio_analysis():
     # 종목 검증 버튼 추가
     if st.button("분석 시작", key="start_analysis"):
         # 포트폴리오 정보 준비
-        symbols = [h['symbol'] for h in holdings]
+        symbols = [h.symbol for h in holdings]
         
         # 종목 코드 검증
         invalid_symbols = []
@@ -903,7 +1015,7 @@ def show_portfolio_analysis():
             
             symbols = valid_symbols
             # 유효한 종목에 해당하는 holdings만 필터링
-            holdings = [h for h in holdings if h['symbol'] in symbols]
+            holdings = [h for h in holdings if h.symbol in symbols]
         
         # 히스토리컬 데이터 가져오기
         with st.spinner("데이터를 가져오는 중입니다..."):
@@ -925,9 +1037,9 @@ def show_portfolio_analysis():
         # 성공적으로 데이터를 가져왔을 때만 아래 코드 실행
         market_values = []
         for h in holdings:
-            if h['symbol'] in hist_data.columns:
-                current_price, _ = fetch_current_price(h['symbol'])
-                market_values.append(h['quantity'] * (current_price or 0))
+            if h.symbol in hist_data.columns:
+                current_price, _ = fetch_current_price(h.symbol)
+                market_values.append(h.quantity * (current_price or 0))
             else:
                 # 데이터를 가져오지 못한 종목은 0으로 처리
                 market_values.append(0)
@@ -954,25 +1066,20 @@ def show_portfolio_analysis():
             # 누적 수익률 계산
             cumulative_returns = (1 + daily_returns).cumprod() - 1
             
-            # 벤치마크 지수 (S&P 500)
+            # 벤치마크 지수 (S&P 500) - 데이터 서비스 사용
             try:
-                # FinanceDataReader로 S&P 500 데이터 가져오기
-                benchmark_df = fdr.DataReader('US500', start_date, end_date)
-                if len(benchmark_df) > 0:
-                    benchmark = benchmark_df['Close']
-                    st.success("FinanceDataReader에서 S&P 500 데이터를 성공적으로 가져왔습니다.")
-                else:
-                    st.warning(
-                        "FinanceDataReader에서 S&P 500 데이터를 가져오는데 "
-                        "실패했습니다. yfinance로 시도합니다."
-                    )
-                    # fdr 실패 시 yfinance로 시도
-                    benchmark = yf.download(
-                        '^GSPC',
-                        start=start_date,
-                        end=end_date,
-                        progress=False
-                    )['Adj Close']
+                benchmark_series = None
+                for sym in ['US500', '^GSPC']:
+                    df = data_service.fetch_single_stock(sym, start_date, end_date)
+                    if df is not None and not df.empty:
+                        benchmark_series = df['Close'] if 'Close' in df.columns else df.iloc[:, 0]
+                        break
+                
+                if benchmark_series is None or len(benchmark_series) == 0:
+                    st.error("벤치마크 데이터를 가져오는데 실패했습니다.")
+                    return
+                
+                benchmark = benchmark_series
                 
                 if len(benchmark) == 0:
                     st.error("벤치마크 데이터를 가져오는데 실패했습니다.")
@@ -1228,7 +1335,7 @@ def show_portfolio_analysis():
             st.write("### 포트폴리오 자산 배분")
             
             # 자산 유형별 분포
-            asset_types = [h['asset_type'] for h in holdings]
+            asset_types = [h.asset_type for h in holdings]
             asset_values = market_values
             
             # 자산 유형별 합계
@@ -1261,7 +1368,7 @@ def show_portfolio_analysis():
             
             # 종목별 분포 트리맵
             holdings_df = pd.DataFrame({
-                '종목': [h['symbol'] for h in holdings],
+                '종목': [h.symbol for h in holdings],
                 '자산 유형': asset_types,
                 '시장 가치': market_values
             })
@@ -1460,7 +1567,16 @@ def show_backtesting():
         return
     
     # 보유 종목 조회
-    holdings = get_portfolio_holdings(st.session_state.current_portfolio_id)
+    try:
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            holdings = holdings_repo.get_portfolio_holdings(db, st.session_state.current_portfolio_id)
+        finally:
+            db.close()
+    except Exception as e:
+        st.error(f"보유 종목 조회 중 오류가 발생했습니다: {e}")
+        return
     
     if not holdings:
         st.info("이 포트폴리오에는 아직 종목이 없습니다.")
@@ -1518,8 +1634,8 @@ def show_backtesting():
     
     # 백테스팅 실행 버튼
     if st.button("백테스팅 실행"):
-        symbols = [h['symbol'] for h in holdings]
-        quantities = [h['quantity'] for h in holdings]
+        symbols = [h.symbol for h in holdings]
+        quantities = [h.quantity for h in holdings]
         
         # 종목 검증 및 데이터 가져오기
         with st.spinner("데이터를 가져오는 중입니다..."):
@@ -1548,191 +1664,110 @@ def show_backtesting():
                 st.error("4. 나중에 다시 시도해보세요. (Yahoo Finance API 일시적 제한일 수 있습니다)")
                 return
 
-# 데이터 유효성 검증 함수 강화
-def validate_ticker(ticker):
-    """종목 코드의 유효성을 검증합니다."""
-    if not ticker:
-        return False, "종목 코드를 입력해주세요."
-    
-    try:
-        # 먼저 기본 심볼로 시도
-        ticker_obj = yf.Ticker(ticker)
-        
-        # 한국 주식의 경우 접미사 확인
-        if not (
-            ticker.endswith('.KS') or 
-            ticker.endswith('.KQ')
-        ) and len(ticker) in [6, 7] and ticker.isdigit():
-            # 한국 주식 코드인 경우 접미사 추가 시도
-            for suffix in ['.KS', '.KQ']:
-                try:
-                    test_ticker = yf.Ticker(f"{ticker}{suffix}")
-                    test_data = test_ticker.history(period='1d')
-                    if len(test_data) > 0:  # empty 대신 len() 사용
-                        ticker = f"{ticker}{suffix}"
-                        break
-                except (ConnectionError, TimeoutError, Exception):
-                    continue
-        
-        # 일반적인 검증 진행
-        try:
-            info = ticker_obj.info
-            
-            # 기본 필드 확인
-            if 'regularMarketPrice' in info and info.get('regularMarketPrice') is not None:
-                return True, None
-            # 대체 필드 확인
-            elif 'currentPrice' in info and info['currentPrice'] is not None:
-                return True, None
-            elif 'previousClose' in info and info['previousClose'] is not None:
-                return True, None
-            
-            # 히스토리 데이터로 확인
-            test_data = ticker_obj.history(period='1d')
-            if len(test_data) > 0:  # empty 대신 len() 사용
-                return True, None
-                
-            return False, "종목 정보를 찾을 수 없습니다."
-            
-        except Exception as e:
-            # info 가져오기 실패, 히스토리로 시도
-            try:
-                test_data = ticker_obj.history(period='1d')
-                if len(test_data) > 0:  # empty 대신 len() 사용
-                    return True, None
-            except Exception as inner_e:
-                return False, f"종목 데이터를 가져올 수 없습니다: {str(inner_e)}"
-            
-            return False, f"종목 정보를 가져올 수 없습니다: {str(e)}"
-        
-    except Exception as e:
-        error_msg = str(e)
-        
-        # 일반적인 오류 메시지를 더 사용자 친화적으로 변환
-        if "No data found" in error_msg:
-            return False, "Yahoo Finance에서 해당 종목의 데이터를 찾을 수 없습니다."
-        elif "Invalid ticker" in error_msg:
-            return False, "유효하지 않은 종목 코드입니다."
-        elif "Connection" in error_msg or "Timeout" in error_msg:
-            return False, "네트워크 연결 문제로 종목을 확인할 수 없습니다."
-        
-        return False, f"종목 검증 중 오류 발생: {error_msg}"
-
 # 포트폴리오 앱의 주요 콘텐츠를 렌더링하는 함수
 def render_portfolio_content():
     """포트폴리오 콘텐츠를 렌더링합니다."""
-    # 세션 상태가 없으면 기본값 사용
-    current_portfolio_id = getattr(st.session_state, 'current_portfolio_id', None)
-    portfolios = getattr(st.session_state, 'portfolios', get_all_portfolios())
+    db_gen = get_db()
+    db = next(db_gen)
     
-    # 사이드바에 포트폴리오 선택기 표시
-    if portfolios:
-        portfolio_names = {p['id']: p['name'] for p in portfolios}
+    try:
+        # 세션 상태가 없으면 기본값 사용
+        current_portfolio_id = getattr(st.session_state, 'current_portfolio_id', None)
         
-        selected_portfolio = st.sidebar.selectbox(
-            "포트폴리오 선택",
-            options=list(portfolio_names.keys()),
-            format_func=lambda x: portfolio_names[x],
-            key="sidebar_portfolio_selector"
-        )
+        if 'portfolios' not in st.session_state:
+            st.session_state.portfolios = portfolio_repo.get_all_portfolios(db)
+
+        portfolios = st.session_state.portfolios
         
-        if selected_portfolio != current_portfolio_id:
-            if hasattr(st, 'session_state'):
-                st.session_state.current_portfolio_id = selected_portfolio
+        # 사이드바에 포트폴리오 선택기 표시
+        if portfolios:
+            portfolio_names = {p.id: p.name for p in portfolios}
+            
+            selected_portfolio_id = st.sidebar.selectbox(
+                "포트폴리오 선택",
+                options=list(portfolio_names.keys()),
+                format_func=lambda x: portfolio_names.get(x, "선택 없음"),
+                key="sidebar_portfolio_selector",
+                index=list(portfolio_names.keys()).index(current_portfolio_id) if current_portfolio_id in portfolio_names else 0
+            )
+            
+            if selected_portfolio_id != current_portfolio_id:
+                st.session_state.current_portfolio_id = selected_portfolio_id
                 st.rerun()
-    else:
-        st.sidebar.info("포트폴리오를 생성해주세요.")
-    
-    # 포트폴리오 생성 UI
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("<h3>새 포트폴리오 생성</h3>", unsafe_allow_html=True)
-    with st.sidebar.form("create_portfolio_sidebar_form"):
-        name = st.text_input("포트폴리오 이름")
-        description = st.text_area("설명 (선택사항)", height=100)
-        submitted = st.form_submit_button("포트폴리오 생성", use_container_width=True)
-        
-        if submitted:
-            if not name:
-                st.sidebar.error("포트폴리오 이름을 입력해주세요.")
-            else:
-                new_portfolio_id = create_portfolio(name, description)
-                if new_portfolio_id:
-                    refresh_portfolios()
-                    if hasattr(st, 'session_state'):
-                        st.session_state.current_portfolio_id = new_portfolio_id
-                    st.sidebar.success(f"'{name}' 포트폴리오가 생성되었습니다.")
-                    st.rerun()
-                else:
-                    st.sidebar.error("포트폴리오 생성 중 오류가 발생했습니다.")
-    
-    # 신규 포트폴리오 종목 추가 UI
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("<h3>신규 포트폴리오 종목 추가</h3>", unsafe_allow_html=True)
-    with st.sidebar.form("add_new_investment_form"):
-        symbol = st.text_input('종목 코드 (예: AAPL, 005930.KS)')
-        quantity = st.number_input('수량', min_value=0.0)
-        purchase_price = st.number_input('매수가', min_value=0.0)
-        purchase_date = st.date_input('매수일', value=datetime.now())
-        asset_type = st.selectbox(
-            '자산 유형',
-            ['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity']
-        )
-        submitted = st.form_submit_button('종목 추가', use_container_width=True)
-
-        if submitted:
-            if not current_portfolio_id:
-                st.sidebar.error("먼저 포트폴리오를 선택해주세요.")
-            else:
-                if add_investment(
-                    current_portfolio_id,
-                    symbol,
-                    quantity,
-                    purchase_price,
-                    purchase_date.strftime('%Y-%m-%d'),
-                    asset_type
-                ):
-                    st.sidebar.success('종목이 성공적으로 추가되었습니다!')
-                    st.rerun()
-    
-    # 메인 콘텐츠
-    if current_portfolio_id:
-        # 선택된 포트폴리오의 전체 정보 표시
-        portfolio = get_portfolio_by_id(current_portfolio_id)
-        if portfolio:
-            # 포트폴리오 기본 정보 섹션
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.header(f"📊 {portfolio['name']}")
-                st.write(f"**설명:** {portfolio['description']}")
-            with col2:
-                st.write("")  # 간격 조정
-                st.write("")  # 간격 조정
-                st.info(f"생성일: {portfolio['created_at']}\n마지막 수정일: {portfolio['updated_at']}")
-            
-            # 보유 종목 및 포트폴리오 가치 섹션
-            st.subheader("📈 보유 종목 현황")
-            show_portfolio_holdings()
-            
-            # 구분선
-            st.markdown("---")
         else:
-            st.info("편집할 포트폴리오를 선택해주세요.")
+            st.sidebar.info("포트폴리오를 생성해주세요.")
+        
+        # 포트폴리오 생성 UI
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("<h3>새 포트폴리오 생성</h3>", unsafe_allow_html=True)
+        with st.sidebar.form("create_portfolio_sidebar_form"):
+            name = st.text_input("포트폴리오 이름")
+            description = st.text_area("설명 (선택사항)", height=100)
+            submitted = st.form_submit_button("포트폴리오 생성", use_container_width=True)
+            
+            if submitted:
+                if not name:
+                    st.sidebar.error("포트폴리오 이름을 입력해주세요.")
+                else:
+                    new_portfolio = portfolio_repo.create_portfolio(db, name, description)
+                    if new_portfolio:
+                        st.session_state.portfolios = portfolio_repo.get_all_portfolios(db)
+                        st.session_state.current_portfolio_id = new_portfolio.id
+                        st.sidebar.success(f"'{name}' 포트폴리오가 생성되었습니다.")
+                        st.rerun()
+                    else:
+                        st.sidebar.error("포트폴리오 생성 중 오류가 발생했습니다.")
+        
+        # 신규 포트폴리오 종목 추가 UI
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("<h3>신규 포트폴리오 종목 추가</h3>", unsafe_allow_html=True)
+        with st.sidebar.form("add_new_investment_form"):
+            symbol = st.text_input('종목 코드 (예: AAPL, 005930.KS)')
+            quantity = st.number_input('수량', min_value=0.0)
+            purchase_price = st.number_input('매수가', min_value=0.0)
+            purchase_date = st.date_input('매수일', value=datetime.now())
+            asset_type = st.selectbox(
+                '자산 유형',
+                ['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity']
+            )
+            submitted = st.form_submit_button('종목 추가', use_container_width=True)
 
-# 메인 앱 - 독립 실행 시 호출
-def main():
-    """독립 실행될 때 호출되는 메인 함수"""
-    # 독립적으로 실행될 때만 페이지 설정을 합니다
-    st.set_page_config(
-        page_title="포트폴리오 백테스터",
-        page_icon="💰",
-        layout="wide"
-    )
-    
-    # 세션 상태 초기화 (독립 실행 시 안전성 보장)
-    initialize_session_state()
-    
-    # 포트폴리오 앱 콘텐츠 렌더링
-    render_portfolio_content()
+            if submitted:
+                if not st.session_state.current_portfolio_id:
+                    st.sidebar.error("먼저 포트폴리오를 선택해주세요.")
+                else:
+                    if add_investment(
+                        db,
+                        st.session_state.current_portfolio_id,
+                        symbol,
+                        quantity,
+                        purchase_price,
+                        purchase_date.strftime('%Y-%m-%d'),
+                        asset_type
+                    ):
+                        st.sidebar.success('종목이 성공적으로 추가되었습니다!')
+                        st.rerun()
 
-if __name__ == "__main__":
-    main()
+        # 메인 콘텐츠
+        if st.session_state.current_portfolio_id:
+            portfolio = portfolio_repo.get_portfolio_by_id(db, st.session_state.current_portfolio_id)
+            if portfolio:
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.header(f"📊 {portfolio.name}")
+                    st.write(f"**설명:** {portfolio.description}")
+                with col2:
+                    st.write("")
+                    st.write("")
+                    st.info(f"생성일: {portfolio.created_at.strftime('%Y-%m-%d')}\n마지막 수정일: {portfolio.updated_at.strftime('%Y-%m-%d') if portfolio.updated_at else 'N/A'}")
+                
+                st.subheader("📈 보유 종목 현황")
+                show_portfolio_holdings(db)
+                st.markdown("---")
+            else:
+                st.info("포트폴리오를 찾을 수 없습니다. 다른 포트폴리오를 선택해주세요.")
+                st.session_state.current_portfolio_id = None
+
+    finally:
+        db.close()
+

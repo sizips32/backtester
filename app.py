@@ -1,10 +1,14 @@
 import streamlit as st
+
+# Streamlit 설정은 어떤 Streamlit 호출보다 먼저 수행되어야 함
+st.set_page_config(page_title="포트폴리오 백테스터", page_icon="💰", layout="wide")
+
 from risk_analysis import show_risk_analysis
 from asset_allocation import show_asset_allocation
 from backtesting import show_backtesting
 from portfolio_rebalancing import show_portfolio_rebalancing
 from position_sizing import show_position_sizing
-import portfolio_app
+from components.portfolio_view import render_portfolio_content
 
 # 설정 시스템 import
 from config.app_config import get_ui_config
@@ -20,7 +24,7 @@ from utils.logger import show_log_dashboard
 
 # 상수 정의
 MENU_OPTIONS = {
-    "💼 포트폴리오 관리": portfolio_app.render_portfolio_content,
+    "💼 포트폴리오 관리": render_portfolio_content,
     "📊 리스크 분석": show_risk_analysis,
     "⚖️ 자산 배분": show_asset_allocation,
     "🔄 포트폴리오 리밸런싱": show_portfolio_rebalancing,
@@ -33,12 +37,6 @@ MENU_OPTIONS = {
 def main():
     # UI 설정 가져오기
     ui_config = get_ui_config()
-    
-    st.set_page_config(
-        page_title=ui_config.page_title,
-        page_icon=ui_config.page_icon,
-        layout=ui_config.layout
-    )
     
     # 테마 시스템 초기화 및 CSS 적용
     theme_manager.apply_custom_css()

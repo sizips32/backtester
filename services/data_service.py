@@ -37,6 +37,7 @@ class DataService:
         self.timeout = api_config.timeout_seconds
         self.max_retries = api_config.max_retries
         self._cache = {}
+        self._now = lambda: datetime.now()
         
     def _get_cache_key(self, ticker: str, start_date: str, end_date: str) -> str:
         """캐시 키 생성"""
@@ -75,6 +76,17 @@ class DataService:
         Returns:
             주가 데이터 DataFrame 또는 None
         """
+        # 날짜 정규화: 순서 보정 및 미래 날짜 캡
+        try:
+            now_dt = _self._now()
+            if end_date > now_dt:
+                end_date = now_dt
+            if start_date > end_date:
+                # 보수적으로 1년 전으로 설정
+                start_date, end_date = end_date - timedelta(days=365), end_date
+        except Exception:
+            pass
+
         cache_key = _self._get_cache_key(
             ticker, 
             start_date.strftime('%Y-%m-%d'),
@@ -112,7 +124,10 @@ class DataService:
                 if attempt < _self.max_retries - 1:
                     time.sleep(2 ** attempt)  # 지수 백오프
                     continue
-                st.error(f"{ticker} 데이터 로드 실패: {str(e)}")
+                # UI에 의존하지 않고 로깅만 수행
+                portfolio_logger.logger.error(
+                    f"DATA_FETCH_FAILED: {ticker} | Error: {str(e)}"
+                )
                 
         return None
     
@@ -172,7 +187,9 @@ class DataService:
                         failed.append(ticker)
                 except Exception as e:
                     failed.append(ticker)
-                    st.error(f"{ticker}: {str(e)}")
+                    portfolio_logger.logger.error(
+                        f"DATA_FETCH_EXCEPTION: {ticker} | Error: {str(e)}"
+                    )
         
         if show_progress:
             progress_bar.empty()
@@ -180,9 +197,11 @@ class DataService:
         
         # 실패한 종목 보고
         if failed:
-            st.warning(f"데이터 로드 실패: {', '.join(failed[:5])}")
-            if len(failed) > 5:
-                st.warning(f"... 외 {len(failed)-5}개")
+            # 서비스 레이어에서는 로깅만 수행
+            portfolio_logger.logger.warning(
+                "DATA_BATCH_FETCH_FAILED: " + ", ".join(failed[:5]) + 
+                (f" ...(+{len(failed)-5})" if len(failed) > 5 else "")
+            )
         
         return results
     
@@ -196,27 +215,46 @@ class DataService:
         Returns:
             (현재가, 에러메시지) 튜플
         """
+        clean_ticker = self._clean_ticker(ticker)
+        
+        # 1) FinanceDataReader 시도 (실패해도 폴백 계속)
         try:
-            clean_ticker = self._clean_ticker(ticker)
-            
-            # FinanceDataReader로 시도
             df = fdr.DataReader(clean_ticker)
-            if not df.empty:
-                return float(df['Close'].iloc[-1]), None
-            
-            # yfinance 폴백
+            if df is not None and not df.empty:
+                price = df['Close'].iloc[-1]
+                return (float(price) if price is not None else None), None
+        except Exception:
+            pass
+
+        # 2) yfinance.history 시도
+        try:
             ticker_obj = yf.Ticker(ticker)
-            info = ticker_obj.info
-            
+            hist = ticker_obj.history(period="1d", auto_adjust=True)
+            if hist is not None and not hist.empty:
+                price = hist['Close'].iloc[-1]
+                return (float(price) if price is not None else None), None
+        except Exception:
+            pass
+
+        # 3) yfinance.fast_info 시도
+        try:
+            fi = getattr(yf.Ticker(ticker), 'fast_info', None)
+            if fi and getattr(fi, 'last_price', None) is not None:
+                return float(fi.last_price), None
+        except Exception:
+            pass
+
+        # 4) yfinance.info 시도
+        try:
+            info = yf.Ticker(ticker).info
             price_fields = ['regularMarketPrice', 'currentPrice', 'price']
             for field in price_fields:
                 if field in info and info[field] is not None:
                     return float(info[field]), None
-            
-            return None, "가격 정보를 찾을 수 없습니다"
-            
-        except Exception as e:
-            return None, f"오류: {str(e)}"
+        except Exception:
+            pass
+        
+        return None, "가격 정보를 찾을 수 없습니다"
     
     def calculate_returns(
         self, 

@@ -35,22 +35,22 @@ class ThemeManager:
         col1, col2, col3 = st.columns([6, 2, 2])
         
         with col2:
-            theme_icon = "🌙" if not st.session_state.dark_mode else "☀️"
+            theme_icon = "🌙" if not st.session_state.get('dark_mode', False) else "☀️"
             if st.button(f"{theme_icon}", help="다크/라이트 모드 전환", key="theme_toggle"):
-                st.session_state.dark_mode = not st.session_state.dark_mode
+                st.session_state.dark_mode = not st.session_state.get('dark_mode', False)
                 st.rerun()
         
         with col3:
-            mobile_icon = "📱" if not st.session_state.mobile_view else "💻"
+            mobile_icon = "📱" if not st.session_state.get('mobile_view', False) else "💻"
             if st.button(f"{mobile_icon}", help="모바일/데스크톱 뷰 전환", key="view_toggle"):
-                st.session_state.mobile_view = not st.session_state.mobile_view
+                st.session_state.mobile_view = not st.session_state.get('mobile_view', False)
                 st.rerun()
     
     def get_current_theme(self) -> Dict[str, str]:
         """현재 테마 색상 반환"""
         base_colors = self.ui_config.colors.copy()
         
-        if st.session_state.dark_mode:
+        if st.session_state.get('dark_mode', False):
             return {
                 'background': '#0E1117',
                 'surface': '#1C1C1C',
@@ -83,8 +83,11 @@ class ThemeManager:
     
     def apply_custom_css(self) -> None:
         """향상된 커스텀 CSS 적용"""
+        # 세션 상태 초기화 (중요!)
+        self._init_session_state()
+        
         theme = self.get_current_theme()
-        is_mobile = st.session_state.mobile_view
+        is_mobile = st.session_state.get('mobile_view', False)
         
         css = f"""
         <style>
@@ -336,10 +339,7 @@ class ThemeManager:
             box-shadow: 0 4px 12px {theme['card_shadow']};
         }}
         
-        /* 사이드바 개선 */
-        .css-1d391kg {{
-            background: {theme['surface']};
-        }}
+        /* 사이드바 커스텀: 내부 클래스 의존 제거 (의도적으로 비움) */
         
         /* 스크롤바 개선 */
         ::-webkit-scrollbar {{

@@ -13,6 +13,40 @@ from utils.error_handler import ValidationError, InsufficientDataError
 
 # 설정 시스템 import
 from config.app_config import get_validation_config
+from services.data_service import data_service
+from datetime import datetime, timedelta
+
+def validate_ticker(ticker):
+    """종목 코드의 유효성을 검증합니다."""
+    if not ticker:
+        return False, "종목 코드를 입력해주세요."
+    
+    try:
+        end = datetime.now()
+        start = end - timedelta(days=7)
+        
+        def has_data(sym: str) -> bool:
+            df = data_service.fetch_single_stock(sym, start, end)
+            return df is not None and not df.empty
+        
+        # 한국 숫자 코드 처리: 접미사 자동 시도
+        if (len(ticker) in [6, 7] and ticker.isdigit()) and not (
+            ticker.endswith('.KS') or ticker.endswith('.KQ')
+        ):
+            for suffix in ['.KS', '.KQ']:
+                if has_data(f"{ticker}{suffix}"):
+                    return True, None
+            # 숫자 코드 자체로도 시도(FDR 호환)
+            if has_data(ticker):
+                return True, None
+            return False, "종목 데이터를 찾을 수 없습니다."
+        
+        # 일반 심볼 검증
+        if has_data(ticker):
+            return True, None
+        return False, "종목 데이터를 찾을 수 없습니다."
+    except Exception as e:
+        return False, f"종목 검증 중 오류 발생: {str(e)}"
 
 class DataValidator:
     """데이터 검증 클래스"""

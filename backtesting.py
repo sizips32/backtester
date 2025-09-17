@@ -19,6 +19,10 @@ from utils.error_handler import (
 
 # 통합 데이터 서비스 import
 from services.data_service import data_service
+from utils.validators import DataValidator
+from config.app_config import get_validation_config
+from utils.database import get_db
+from repository import portfolio_repo, target_weights_repo, performance_repo
 
 @st.cache_data(ttl=3600)  # 1시간 캐시
 def fetch_stock_data(
@@ -62,7 +66,9 @@ def calculate_portfolio_value(data, weights):
     # NA 값을 먼저 처리한 후 수익률 계산
     data_filled = data.ffill()
     returns = data_filled.pct_change()
-    weighted_returns = (returns * pd.Series(weights)).sum(axis=1)
+    # 열 정렬 및 누락 자산은 0 가중치로 안전 처리
+    weights_series = pd.Series(weights).reindex(returns.columns, fill_value=0)
+    weighted_returns = (returns * weights_series).sum(axis=1)
     return (1 + weighted_returns).cumprod()
 
 def calculate_metrics(returns):
@@ -121,77 +127,69 @@ def calculate_metrics(returns):
     }
 
 def save_portfolio(name, assets, weights):
-    """포트폴리오 저장 함수"""
-    # 포트폴리오 데이터 디렉토리 확인 및 생성
-    if not os.path.exists('portfolios'):
-        os.makedirs('portfolios')
-    
-    # 포트폴리오 데이터 준비
-    portfolio_data = {
-        'name': name,
-        'assets': assets,
-        'weights': {asset: float(weights[asset]) for asset in assets}
-    }
-    
-    # JSON 파일로 저장
-    with open(f'portfolios/{name}.json', 'w') as f:
-        json.dump(portfolio_data, f)
-    
-    # 저장된 포트폴리오 목록 업데이트
-    portfolio_list = get_portfolio_list()
-    if name not in portfolio_list:
-        portfolio_list.append(name)
-        with open('portfolios/list.json', 'w') as f:
-            json.dump(portfolio_list, f)
-    
-    return True
+    """포트폴리오 목표 비중을 DB에 저장"""
+    try:
+        portfolio_id = upsert_portfolio(name)
+        if not portfolio_id:
+            st.error("포트폴리오를 생성/가져오지 못했습니다.")
+            return False
+        weights_clean = {asset: float(weights[asset]) for asset in assets}
+        ok = set_portfolio_target_weights(portfolio_id, weights_clean)
+        if not ok:
+            st.error("포트폴리오 목표 비중 저장에 실패했습니다.")
+            return False
+        return True
+    except Exception as e:
+        st.error(f"포트폴리오 저장 중 오류: {str(e)}")
+        return False
 
 def get_portfolio_list():
-    """저장된 포트폴리오 목록 불러오기"""
-    if not os.path.exists('portfolios'):
-        os.makedirs('portfolios')
-    
-    if not os.path.exists('portfolios/list.json'):
-        with open('portfolios/list.json', 'w') as f:
-            json.dump([], f)
-        return []
-    
-    with open('portfolios/list.json', 'r') as f:
-        return json.load(f)
+    """목표 비중이 설정된 포트폴리오 이름 목록(DB)"""
+    items = list_portfolios_with_target_weights()
+    return [it['name'] for it in items]
 
 def load_portfolio(name):
-    """저장된 포트폴리오 불러오기"""
+    """저장된 포트폴리오(목표 비중) 불러오기(DB)"""
     try:
-        with open(f'portfolios/{name}.json', 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        st.error(f"포트폴리오 '{name}'을 찾을 수 없습니다.")
-        return None
+        p = get_portfolio_by_name(name)
+        if not p:
+            st.error(f"포트폴리오 '{name}'을 찾을 수 없습니다.")
+            return None
+        weights = get_portfolio_target_weights(p['id'])
+        if not weights:
+            st.error("해당 포트폴리오에 저장된 목표 비중이 없습니다.")
+            return None
+        return {
+            'name': name,
+            'assets': list(weights.keys()),
+            'weights': weights
+        }
     except Exception as e:
         st.error(f"포트폴리오 로드 중 오류: {str(e)}")
         return None
 
 def delete_portfolio(name):
-    """포트폴리오 삭제"""
+    """포트폴리오 목표 비중 삭제(DB). 포트폴리오 자체는 유지"""
     try:
-        # 포트폴리오 파일 삭제
-        if os.path.exists(f'portfolios/{name}.json'):
-            os.remove(f'portfolios/{name}.json')
-        
-        # 목록에서 제거
-        portfolio_list = get_portfolio_list()
-        if name in portfolio_list:
-            portfolio_list.remove(name)
-            with open('portfolios/list.json', 'w') as f:
-                json.dump(portfolio_list, f)
-        
-        return True
+        p = get_portfolio_by_name(name)
+        if not p:
+            st.error(f"포트폴리오 '{name}'을 찾을 수 없습니다.")
+            return False
+        return delete_portfolio_target_weights(p['id'])
     except Exception as e:
         st.error(f"포트폴리오 삭제 중 오류: {str(e)}")
         return False
 
 def show_backtesting():
     """포트폴리오 백테스팅 페이지"""
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        # db 세션은 아래 저장/조회 동작에서 사용됩니다.
+        # 현재 블록에서는 초기화만 수행합니다.
+        pass
+    finally:
+        db.close()
     # 세션 상태 초기화
     if 'selected_portfolio' not in st.session_state:
         st.session_state['selected_portfolio'] = {
@@ -341,14 +339,7 @@ def show_backtesting():
             * 일관된 수익 패턴과 심한 손실 구간을 파악하세요.
             """)
             
-    # 백테스팅에 사용할 데이터를 세션 상태로 관리
-    if 'selected_portfolio' not in st.session_state:
-        st.session_state.selected_portfolio = {
-            'assets': [],
-            'weights': {},
-            'name': '',
-            'source': None  # 'existing' 또는 'new'
-        }
+    # 백테스팅에 사용할 데이터를 세션 상태로 관리 (상단에서 이미 초기화됨)
     
     # 탭 생성: 포트폴리오 선택/생성
     tab1, tab2 = st.tabs(["기존 포트폴리오 선택", "새 포트폴리오 생성"])
@@ -446,6 +437,97 @@ def show_backtesting():
                         use_container_width=True,
                         hide_index=True
                     )
+
+                # 목표 비중 바로 편집 UI
+                if st.button("🎯 목표 비중 바로 편집", key="bt_toggle_edit_weights"):
+                    st.session_state['bt_edit_weights_open'] = not st.session_state.get('bt_edit_weights_open', False)
+
+                with st.expander("목표 비중 편집", expanded=st.session_state.get('bt_edit_weights_open', False)):
+                    try:
+                        # 현재 목표 비중 로드
+                        pinfo = get_portfolio_by_name(selected_portfolio)
+                        current_weights = {}
+                        if pinfo:
+                            current_weights = get_portfolio_target_weights(pinfo['id']) or {}
+                        if not current_weights:
+                            # 로드된 포트폴리오의 가중치로 초기화
+                            current_weights = loaded_portfolio['weights']
+
+                        tv = get_validation_config()
+                        st.caption(
+                            f"가중치 합계는 100%여야 하며 허용 오차는 ±{int(tv.weight_tolerance*100)}% 입니다."
+                        )
+
+                        weights_df_edit = pd.DataFrame(
+                            [
+                                {"자산": sym, "비중(%)": round(w*100, 2)}
+                                for sym, w in current_weights.items()
+                            ]
+                        )
+                        if weights_df_edit.empty:
+                            weights_df_edit = pd.DataFrame([{"자산": "", "비중(%)": 0.0}])
+
+                        edited_df = st.data_editor(
+                            weights_df_edit,
+                            num_rows="dynamic",
+                            use_container_width=True,
+                            hide_index=True,
+                            key="bt_target_weights_editor"
+                        )
+
+                        ca, cb = st.columns(2)
+                        with ca:
+                            if st.button("정규화(합계 100%)", key="bt_normalize_weights"):
+                                df = edited_df.copy()
+                                df['자산'] = df['자산'].astype(str).str.strip()
+                                df = df[df['자산'] != ""]
+                                total = df['비중(%)'].astype(float).sum()
+                                if total > 0:
+                                    df['비중(%)'] = df['비중(%)'].astype(float) / total * 100
+                                    st.session_state['bt_target_weights_editor'] = df
+                                    st.rerun()
+                                else:
+                                    st.warning("정규화할 값이 없습니다.")
+                        with cb:
+                            if st.button("저장", key="bt_save_target_weights", type="primary"):
+                                df = edited_df.copy()
+                                df['자산'] = df['자산'].astype(str).str.strip()
+                                df = df[df['자산'] != ""]
+                                if df.empty:
+                                    st.error("최소 1개 이상의 자산을 입력하세요.")
+                                elif df['자산'].duplicated().any():
+                                    st.error("중복된 자산이 있습니다. 중복을 제거해주세요.")
+                                else:
+                                    try:
+                                        weights_new = {row['자산']: float(row['비중(%)'])/100.0 for _, row in df.iterrows()}
+                                    except Exception:
+                                        st.error("비중(%)는 숫자여야 합니다.")
+                                        st.stop()
+
+                                    validator = DataValidator()
+                                    valid, errors = validator.validate_portfolio_weights(weights_new)
+                                    if not valid:
+                                        for err in errors:
+                                            st.error(err)
+                                    else:
+                                        if not pinfo:
+                                            st.error("포트폴리오 정보를 찾을 수 없습니다.")
+                                        else:
+                                            ok = set_portfolio_target_weights(pinfo['id'], weights_new)
+                                            if ok:
+                                                st.success("목표 비중이 저장되었습니다.")
+                                                # 세션 상태 갱신
+                                                st.session_state.selected_portfolio = {
+                                                    'assets': list(weights_new.keys()),
+                                                    'weights': weights_new,
+                                                    'name': selected_portfolio,
+                                                    'source': 'existing'
+                                                }
+                                                st.rerun()
+                                            else:
+                                                st.error("목표 비중 저장에 실패했습니다.")
+                    except Exception as e:
+                        st.error(f"목표 비중 편집 중 오류: {str(e)}")
                 
                 # 백테스팅 선택 버튼
                 if st.button("이 포트폴리오로 백테스팅 실행", key="run_existing"):
@@ -833,3 +915,34 @@ def show_backtesting():
             st.info("월별 수익률 히트맵을 생성하기 위한 충분한 데이터가 없습니다.")
     except Exception as e:
         st.error(f"월별 수익률 히트맵 생성 중 오류가 발생했습니다: {str(e)}") 
+
+    # 5. 성과 기록 저장 섹션
+    st.subheader("5. 성과 기록 저장")
+    default_name = st.session_state.selected_portfolio.get('name') or f"Portfolio-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    perf_name = st.text_input("기록할 포트폴리오 이름", value=default_name, key="perf_record_name")
+    if st.button("DB에 성과 기록 저장", key="save_performance_to_db", type="primary"):
+        if not perf_name.strip():
+            st.error("포트폴리오 이름을 입력하세요.")
+        else:
+            try:
+                portfolio_id = upsert_portfolio(perf_name.strip())
+                if not portfolio_id:
+                    st.error("포트폴리오 생성/조회에 실패했습니다.")
+                else:
+                    pv = portfolio_value
+                    dr = pv.pct_change()
+                    saved = 0
+                    for dt, val in pv.items():
+                        daily = dr.loc[dt] if dt in dr.index else None
+                        daily_val = None if (daily is None or pd.isna(daily)) else float(daily)
+                        ok = record_portfolio_performance(
+                            portfolio_id,
+                            dt.strftime('%Y-%m-%d'),
+                            float(val),
+                            daily_val
+                        )
+                        if ok:
+                            saved += 1
+                    st.success(f"성과 기록 저장 완료: {saved}건 저장")
+            except Exception as e:
+                st.error(f"성과 기록 저장 중 오류: {str(e)}")

@@ -32,20 +32,23 @@
 ```
 ├── app.py                     # 메인 웹 애플리케이션
 ├── portfolio_app.py           # 포트폴리오 관리 핵심 로직
-├── config.py                  # 설정 파일
+├── config/                    # 설정 폴더
+│   └── app_config.py          # 통합 설정 파일
 ├── data/                      # 데이터 저장소
 ├── utils/                     # 유틸리티 함수
-│   └── cache_utils.py         # 캐싱 유틸리티
+│   └── logger.py              # 로깅 유틸리티
+├── services/                  # 서비스 레이어
+│   └── data_service.py        # 통합 데이터 서비스
 ├── asset_allocation.py        # 자산 배분 로직
-├── backtesting.py            # 백테스팅 엔진
-├── risk_analysis.py          # 리스크 분석 도구
+├── backtesting.py             # 백테스팅 엔진
+├── risk_analysis.py           # 리스크 분석 도구
 ├── portfolio_rebalancing.py  # 리밸런싱 로직
 ├── position_sizing.py        # 포지션 사이징 전략
-├── run.py                    # 커스텀 포트로 앱 실행 스크립트
-├── run.sh                    # 쉘 스크립트로 앱 실행
+├── run.py                     # 커스텀 포트로 앱 실행 스크립트
+├── run.sh                     # 쉘 스크립트로 앱 실행
 ├── .streamlit/               # Streamlit 설정 폴더
 │   └── config.toml           # Streamlit 설정 파일
-└── requirements.txt          # 프로젝트 의존성
+└── requirements.txt           # 프로젝트 의존성
 ```
 
 ## 기술 스택
@@ -55,7 +58,7 @@
 - **데이터 시각화**: Plotly, Matplotlib, Seaborn
 - **웹 인터페이스**: Streamlit
 - **금융 데이터**: yfinance
-- **수학/통계**: SciPy, TA-Lib
+- **수학/통계/TA**: SciPy, ta
 
 ## 설치 방법
 
