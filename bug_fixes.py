@@ -5,6 +5,15 @@
 
 import os
 import re
+import logging
+
+# 로깅 설정
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(funcName)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 def fix_deprecated_fillna():
     """portfolio_app.py의 deprecated fillna 메서드 수정"""
@@ -22,7 +31,7 @@ def fix_deprecated_fillna():
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(content)
     
-    print(f"✅ {file_path}: fillna 메서드 수정 완료")
+    logger.info("fillna 메서드 수정 완료", extra={"file_path": file_path})
 
 def fix_pct_change_parameter():
     """backtesting.py의 pct_change 파라미터 오류 수정"""
@@ -40,7 +49,7 @@ def fix_pct_change_parameter():
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(content)
     
-    print(f"✅ {file_path}: pct_change 파라미터 수정 완료")
+    logger.info("pct_change 파라미터 수정 완료", extra={"file_path": file_path})
 
 def add_error_handling():
     """risk_analysis.py에 개선된 에러 처리 추가"""
@@ -64,21 +73,21 @@ def validate_data(data):
     return True
 """
     
-    print("✅ 에러 처리 함수 추가 제안 생성 완료")
+    logger.info("에러 처리 함수 추가 제안 생성 완료")
     return improvements
 
 if __name__ == "__main__":
-    print("🔧 버그 수정 시작...")
+    logger.info("버그 수정 시작")
     
     try:
         fix_deprecated_fillna()
         fix_pct_change_parameter()
         error_handling_code = add_error_handling()
         
-        print("\n📝 추가 제안 코드:")
-        print(error_handling_code)
-        
-        print("\n✨ 모든 버그 수정 완료!")
+        logger.info("추가 제안 코드 생성")
+        logger.debug("제안 코드 내용", extra={"code": error_handling_code})
+
+        logger.info("모든 버그 수정 완료")
         
     except Exception as e:
-        print(f"❌ 오류 발생: {e}")
+        logger.error("버그 수정 중 오류 발생", exc_info=True)

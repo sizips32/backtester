@@ -33,3 +33,10 @@ pydantic-settings>=2.0.0
 # 테스팅
 pytest>=8.0.0
 pytest-cov>=5.0.0
+pytest-benchmark>=4.0.0
+
+# 성능 모니터링
+psutil>=5.9.0
+
+# 고급 통계 분석
+scipy>=1.11.3

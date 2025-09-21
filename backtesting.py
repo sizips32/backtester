@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import FinanceDataReader as fdr
+import yfinance as yf
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
@@ -499,7 +499,8 @@ def show_backtesting():
                                     st.error("중복된 자산이 있습니다. 중복을 제거해주세요.")
                                 else:
                                     try:
-                                        weights_new = {row['자산']: float(row['비중(%)'])/100.0 for _, row in df.iterrows()}
+                                        # 벡터화 연산으로 성능 개선
+                                        weights_new = dict(zip(df['자산'], df['비중(%)'].astype(float) / 100.0))
                                     except Exception:
                                         st.error("비중(%)는 숫자여야 합니다.")
                                         st.stop()

@@ -6,7 +6,7 @@
 import pandas as pd
 import numpy as np
 import yfinance as yf
-import FinanceDataReader as fdr
+# import FinanceDataReader as fdr  # Package no longer available
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -101,8 +101,9 @@ class DataService:
         
         for attempt in range(_self.max_retries):
             try:
-                # FinanceDataReader 우선 시도
-                df = fdr.DataReader(clean_ticker, start_date, end_date)
+                # yfinance 우선 시도
+                ticker = yf.Ticker(clean_ticker)
+                df = ticker.history(start=start_date, end=end_date)
                 if not df.empty:
                     _self._cache[cache_key] = df
                     return df
@@ -217,9 +218,10 @@ class DataService:
         """
         clean_ticker = self._clean_ticker(ticker)
         
-        # 1) FinanceDataReader 시도 (실패해도 폴백 계속)
+        # 1) yfinance 시도 (실패해도 폴백 계속)
         try:
-            df = fdr.DataReader(clean_ticker)
+            ticker = yf.Ticker(clean_ticker)
+            df = ticker.history(period="1d")
             if df is not None and not df.empty:
                 price = df['Close'].iloc[-1]
                 return (float(price) if price is not None else None), None

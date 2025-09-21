@@ -185,7 +185,9 @@ def show_portfolio_management(db: Session):
                 current_weights = target_weights_repo.get_portfolio_target_weights(db, portfolio.id)
                 edited_df = st.data_editor(pd.DataFrame([{"종목": sym, "비중(%)": w*100} for sym, w in current_weights.items()] or [{"종목": "", "비중(%)": 0.0}]), num_rows="dynamic")
                 if st.button("목표 비중 저장"):
-                    weights = {row['종목']: float(row['비중(%)'])/100.0 for _, row in edited_df.iterrows() if row['종목']}
+                    # 벡터화 연산으로 성능 개선 - 빈 종목 필터링
+                    valid_rows = edited_df[edited_df['종목'] != ''].copy()
+                    weights = dict(zip(valid_rows['종목'], valid_rows['비중(%)'].astype(float) / 100.0))
                     target_weights_repo.set_portfolio_target_weights(db, portfolio.id, weights)
                     st.success("목표 비중이 저장되었습니다.")
 
