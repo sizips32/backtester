@@ -638,9 +638,11 @@ def show_portfolio_holdings(db: Session):
                     st.write("")
                     with st.expander("벤치마크 비교", expanded=False):
                         bm_name_map = {
-                            "S&P500": ["US500", "^GSPC"],
-                            "KOSPI": ["KS11"],
-                            "Nikkei225": ["N225"],
+                            "S&P500": ["^GSPC"],
+                            "KOSPI": ["^KS11"],
+                            "나스닥": ["^IXIC"],
+                            "다우존스": ["^DJI"],
+                            "Nikkei225": ["^N225"],
                         }
                         bm_options = list(bm_name_map.keys())
                         selected_bm = st.multiselect("벤치마크(복수 선택 가능)", bm_options, default=["S&P500"], key="perf_bm_multi")
@@ -1071,7 +1073,7 @@ def show_portfolio_analysis():
             # 벤치마크 지수 (S&P 500) - 데이터 서비스 사용
             try:
                 benchmark_series = None
-                for sym in ['US500', '^GSPC']:
+                for sym in ['^GSPC']:
                     df = data_service.fetch_single_stock(sym, start_date, end_date)
                     if df is not None and not df.empty:
                         benchmark_series = df['Close'] if 'Close' in df.columns else df.iloc[:, 0]

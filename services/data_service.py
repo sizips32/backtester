@@ -56,7 +56,8 @@ class DataService:
         """티커 심볼 정리"""
         if self._is_korean_stock(ticker):
             return ticker.replace('.KS', '').replace('.KQ', '')
-        return ticker.replace('^', '')
+        # 지수 데이터의 경우 ^ 기호를 유지해야 함
+        return ticker
     
     @st.cache_data(ttl=3600)
     def fetch_single_stock(
