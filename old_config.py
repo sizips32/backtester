@@ -1,72 +1,12 @@
-"""설정 파일 분리"""
-import os
-from dataclasses import dataclass, field
-from typing import Dict, List
+# DEPRECATED: 레거시 설정 파일
+# 새로운 설정은 config/app_config.py를 사용하세요.
+"""
+이 파일은 더 이상 사용되지 않습니다.
+새로운 설정 시스템을 위해 config/app_config.py를 사용하세요.
 
-@dataclass
-class Config:
-    PORTFOLIO_FILE: str = 'portfolio.json'
-    DEFAULT_RISK_FREE_RATE: float = 0.02
-    MARKET_INDICES: Dict[str, str] = field(default_factory=lambda: {
-        "KOSPI": "^KS11",
-        "S&P 500": "^GSPC"
-    })
-    ANALYSIS_PERIODS: Dict[str, int] = field(default_factory=lambda: {
-        "1개월": 30,
-        "3개월": 90,
-        "6개월": 180,
-        "1년": 365,
-        "3년": 1095,
-        "5년": 1825
-    })
-
-@dataclass
-class BacktestConfig:
-    """백테스트 설정"""
-    initial_capital: float = 100_000_000
-    risk_free_rate: float = 0.02
-    transaction_cost: float = 0.0015
-    rebalancing_frequency: str = "monthly"
-
-@dataclass
-class RiskConfig:
-    """리스크 관리 설정"""
-    max_drawdown: float = 0.20
-    var_confidence: float = 0.95
-    stop_loss: float = 0.05
-    position_size_limit: float = 0.20
-
-@dataclass
-class AppConfig:
-    """앱 전체 설정"""
-    PORTFOLIO_FILE: str = 'portfolio.json'
-    DEFAULT_RISK_FREE_RATE: float = 0.02
-    CACHE_TTL: int = 3600
-    DATA_MIN_PERIODS: int = 252
-    
-    # 시장 지수 설정
-    MARKET_INDICES: Dict[str, str] = field(default_factory=lambda: {
-        "KOSPI": "^KS11",
-        "S&P 500": "^GSPC",
-        "NASDAQ": "^IXIC"
-    })
-    
-    # 분석 기간 설정
-    ANALYSIS_PERIODS: Dict[str, int] = field(default_factory=lambda: {
-        "1개월": 30,
-        "3개월": 90,
-        "6개월": 180,
-        "1년": 365,
-        "3년": 1095,
-        "5년": 1825
-    })
-    
-    # 리스크 관리 설정
-    RISK_LIMITS: Dict[str, float] = field(default_factory=lambda: {
-        "max_drawdown": 0.20,
-        "var_confidence": 0.95,
-        "stop_loss": 0.05,
-        "position_size": 0.20
-    })
-
-config = AppConfig() 
+기존 설정들은 다음과 같이 이전되었습니다:
+- Config → config/app_config.py의 AppConfig
+- BacktestConfig → TradingConfig
+- RiskConfig → AnalysisConfig.risk_*
+- AppConfig → 통합된 AppConfig
+""" 

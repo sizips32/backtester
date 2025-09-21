@@ -9,7 +9,8 @@ from utils.database import get_db
 from repository.holdings_repo import (
     get_portfolio_holdings, add_holding_to_portfolio, update_holding
 )
-from repository.portfolio_repo import get_portfolio_by_id
+from repository.portfolio_repo import get_portfolio_by_id, get_all_portfolios
+from repository.target_weights_repo import get_portfolio_target_weights
 from services.data_service import data_service
 
 def get_exchange_rate():
@@ -135,7 +136,280 @@ def get_rebalancing_description(method: str) -> str:
 
 def show_portfolio_rebalancing():
     st.header("포트폴리오 리밸런싱")
-    
+
+    # 탭 생성: 저장된 포트폴리오별 + 수동 입력
+    tab1, tab2 = st.tabs(["📁 저장된 포트폴리오", "✏️ 수동 입력"])
+
+    with tab1:
+        show_saved_portfolio_rebalancing()
+
+    with tab2:
+        show_manual_portfolio_rebalancing()
+
+def show_saved_portfolio_rebalancing():
+    """저장된 포트폴리오별 리밸런싱"""
+    st.subheader("저장된 포트폴리오 리밸런싱")
+
+    # 저장된 포트폴리오 목록 가져오기
+    db = next(get_db())
+    try:
+        portfolios = get_all_portfolios(db)
+
+        # 목표 비중이 있는 포트폴리오만 필터링
+        portfolios_with_weights = []
+        for portfolio in portfolios:
+            weights = get_portfolio_target_weights(db, portfolio.id)
+            if weights:
+                portfolios_with_weights.append({
+                    'id': portfolio.id,
+                    'name': portfolio.name,
+                    'description': portfolio.description,
+                    'weights': weights
+                })
+    finally:
+        db.close()
+
+    if not portfolios_with_weights:
+        st.warning("리밸런싱할 수 있는 포트폴리오가 없습니다. 포트폴리오 관리에서 목표 비중을 설정해주세요.")
+        return
+
+    # 포트폴리오 선택
+    portfolio_names = [p['name'] for p in portfolios_with_weights]
+    selected_portfolio_name = st.selectbox(
+        "리밸런싱할 포트폴리오를 선택하세요:",
+        portfolio_names
+    )
+
+    if not selected_portfolio_name:
+        st.stop()
+
+    # 선택된 포트폴리오 정보 가져오기
+    selected_portfolio = next(p for p in portfolios_with_weights if p['name'] == selected_portfolio_name)
+    portfolio_id = selected_portfolio['id']
+    target_weights = selected_portfolio['weights']
+
+    # 포트폴리오 정보 표시
+    st.info(f"**포트폴리오**: {selected_portfolio['name']}")
+    if selected_portfolio['description']:
+        st.info(f"**설명**: {selected_portfolio['description']}")
+
+    # 목표 비중 표시
+    with st.expander("목표 비중 확인", expanded=False):
+        target_df = pd.DataFrame([
+            {'자산': symbol, '목표 비중': f"{weight*100:.1f}%"}
+            for symbol, weight in target_weights.items()
+        ])
+        st.dataframe(target_df, use_container_width=True)
+
+    # 현재 보유 종목 가져오기
+    db = next(get_db())
+    try:
+        holdings = get_portfolio_holdings(db, portfolio_id)
+    finally:
+        db.close()
+
+    if not holdings:
+        st.warning("현재 포트폴리오에 보유 종목이 없습니다.")
+        return
+
+    # 현재 가격으로 업데이트된 포지션 정보 생성
+    st.subheader("현재 포트폴리오 상태")
+
+    current_positions = {}
+    position_data = []
+
+    for holding in holdings:
+        symbol = holding.symbol
+        quantity = holding.quantity
+        purchase_price = holding.purchase_price
+
+        # 현재가 조회
+        current_price, error_msg = data_service.get_current_price(symbol)
+        if current_price is None:
+            current_price = purchase_price
+            st.warning(f"{symbol}: 현재가 조회 실패, 매수가({purchase_price:.2f}) 사용")
+
+        current_positions[symbol] = (quantity, current_price)
+
+        position_data.append({
+            '자산': symbol,
+            '수량': quantity,
+            '매수가($)': purchase_price,
+            '현재가($)': current_price,
+            '평가금액($)': quantity * current_price,
+            '손익률': ((current_price - purchase_price) / purchase_price) * 100 if purchase_price > 0 else 0
+        })
+
+    # 현재 포트폴리오 표시
+    portfolio_df = pd.DataFrame(position_data)
+    total_value = portfolio_df['평가금액($)'].sum()
+    portfolio_df['현재 비중'] = portfolio_df['평가금액($)'] / total_value
+
+    st.dataframe(portfolio_df.style.format({
+        '수량': '{:.2f}',
+        '매수가($)': '{:,.2f}',
+        '현재가($)': '{:,.2f}',
+        '평가금액($)': '{:,.2f}',
+        '손익률': '{:+.1f}%',
+        '현재 비중': '{:.1%}'
+    }), use_container_width=True)
+
+    # 총 포트폴리오 가치
+    st.metric("총 포트폴리오 가치", f"${total_value:,.2f}")
+
+    # 리밸런싱 설정
+    st.subheader("리밸런싱 설정")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        threshold = st.slider(
+            "리밸런싱 임계값 (%)",
+            min_value=1,
+            max_value=20,
+            value=5,
+            key="saved_portfolio_threshold"
+        ) / 100
+
+    with col2:
+        cash_usd = st.number_input(
+            "추가 투자 가능 현금($)",
+            min_value=0.0,
+            value=0.0,
+            step=100.0,
+            format="%.2f",
+            key="saved_portfolio_cash"
+        )
+
+    # 리밸런싱 분석
+    rebalancer = PortfolioRebalancer(target_weights, threshold)
+
+    # 리밸런싱 필요 여부 확인
+    current_weights = rebalancer.calculate_current_weights(current_positions)
+    needs_rebalancing = rebalancer.needs_rebalancing(current_weights)
+
+    if not needs_rebalancing and cash_usd == 0:
+        st.success("✅ 현재 포트폴리오는 목표 비중 내에 있습니다. 리밸런싱이 필요하지 않습니다.")
+
+        # 현재 비중 vs 목표 비중 비교 표시
+        comparison_data = []
+        for symbol in target_weights.keys():
+            comparison_data.append({
+                '자산': symbol,
+                '목표 비중': f"{target_weights[symbol]*100:.1f}%",
+                '현재 비중': f"{current_weights.get(symbol, 0)*100:.1f}%",
+                '차이': f"{(current_weights.get(symbol, 0) - target_weights[symbol])*100:+.1f}%"
+            })
+
+        comparison_df = pd.DataFrame(comparison_data)
+        st.dataframe(comparison_df, use_container_width=True)
+        return
+
+    # 필요한 거래 계산
+    trades = rebalancer.calculate_trades(current_positions, cash_usd)
+
+    # 리밸런싱 결과 표시
+    st.subheader("필요한 리밸런싱 거래")
+
+    trades_data = []
+    for asset, trade_qty in trades.items():
+        if abs(trade_qty) > 0.001:  # 미미한 거래는 제외
+            current_price = current_positions[asset][1]
+            trade_value = trade_qty * current_price
+
+            trades_data.append({
+                '자산': asset,
+                '거래수량': trade_qty,
+                '거래유형': '매수' if trade_qty > 0 else '매도',
+                '현재가($)': current_price,
+                '거래금액($)': abs(trade_value)
+            })
+
+    if trades_data:
+        trades_df = pd.DataFrame(trades_data)
+
+        # 거래 유형별 색상 적용
+        def color_trades(val):
+            if val == '매수':
+                return 'background-color: #d4f1d4'
+            elif val == '매도':
+                return 'background-color: #ffd6d6'
+            return ''
+
+        styled_df = trades_df.style.format({
+            '거래수량': '{:+.2f}',
+            '현재가($)': '{:,.2f}',
+            '거래금액($)': '{:,.2f}'
+        }).applymap(color_trades, subset=['거래유형'])
+
+        st.dataframe(styled_df, use_container_width=True)
+
+        # 거래 요약
+        buy_total = trades_df[trades_df['거래유형'] == '매수']['거래금액($)'].sum()
+        sell_total = trades_df[trades_df['거래유형'] == '매도']['거래금액($)'].sum()
+        net_cost = buy_total - sell_total
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("총 매수 금액", f"${buy_total:,.2f}")
+        with col2:
+            st.metric("총 매도 금액", f"${sell_total:,.2f}")
+        with col3:
+            st.metric("순 필요 자금", f"${net_cost:,.2f}")
+
+        # 리밸런싱 실행 버튼
+        if st.button("리밸런싱 실행", type="primary", use_container_width=True, key="saved_portfolio_execute"):
+            success_count = 0
+            error_count = 0
+
+            for _, trade in trades_df.iterrows():
+                asset = trade['자산']
+                trade_qty = trade['거래수량']
+
+                try:
+                    # 현재 보유량 업데이트
+                    current_qty = current_positions[asset][0]
+                    new_qty = current_qty + trade_qty
+
+                    # 보유량이 0 이하가 되면 해당 종목 제거
+                    if new_qty <= 0:
+                        # 보유 종목에서 삭제 로직 (필요시 구현)
+                        continue
+
+                    # 데이터베이스 업데이트
+                    db = next(get_db())
+                    try:
+                        # 해당 종목의 holding_id 찾기
+                        holdings = get_portfolio_holdings(db, portfolio_id)
+                        holding = next(h for h in holdings if h.symbol == asset)
+
+                        update_holding(
+                            db,
+                            holding.id,
+                            new_qty,
+                            holding.purchase_price,
+                            holding.purchase_date,
+                            holding.asset_type
+                        )
+                        success_count += 1
+                    finally:
+                        db.close()
+
+                except Exception as e:
+                    st.error(f"{asset} 업데이트 실패: {str(e)}")
+                    error_count += 1
+
+            if success_count > 0:
+                st.success(f"✅ {success_count}개 종목이 성공적으로 리밸런싱되었습니다.")
+                if error_count > 0:
+                    st.warning(f"⚠️ {error_count}개 종목에서 오류가 발생했습니다.")
+                st.rerun()
+            else:
+                st.error("❌ 리밸런싱 실행에 실패했습니다.")
+    else:
+        st.info("현재 설정에서는 필요한 거래가 없습니다.")
+
+def show_manual_portfolio_rebalancing():
+    """수동 입력 포트폴리오 리밸런싱 (기존 코드)"""
     # 환율 정보 가져오기
     default_usd_krw, exchange_rate_updated = get_exchange_rate()
     
@@ -190,10 +464,11 @@ def show_portfolio_rebalancing():
     col1, col2 = st.columns(2)
     with col1:
         threshold = st.slider(
-            "리밸런싱 임계값 (%)", 
-            min_value=1, 
-            max_value=20, 
-            value=5
+            "리밸런싱 임계값 (%)",
+            min_value=1,
+            max_value=20,
+            value=5,
+            key="manual_portfolio_threshold"
         ) / 100
     
     with col2:
@@ -217,7 +492,7 @@ def show_portfolio_rebalancing():
         finally:
             db.close()
         if portfolio:
-            st.info(f"현재 선택된 포트폴리오: **{portfolio['name']}**")
+            st.info(f"현재 선택된 포트폴리오: **{portfolio.name}**")
             if st.button("현재 포트폴리오 정보 로드", use_container_width=True):
                 # 현재 포트폴리오 정보 가져오기
                 db_gen = get_db()
@@ -231,12 +506,12 @@ def show_portfolio_rebalancing():
                     st.session_state.positions = {}
                     for holding in holdings:
                         # 현재가 조회 (데이터 서비스 사용)
-                        current_price, _ = data_service.get_current_price(holding['symbol'])
+                        current_price, error_msg = data_service.get_current_price(holding.symbol)
                         if current_price is None:
-                            current_price = holding['purchase_price']  # 현재가를 가져올 수 없을 경우 매수가 사용
-                        
-                        st.session_state.positions[holding['symbol']] = (
-                            holding['quantity'], 
+                            current_price = holding.purchase_price  # 현재가를 가져올 수 없을 경우 매수가 사용
+
+                        st.session_state.positions[holding.symbol] = (
+                            holding.quantity,
                             current_price
                         )
                     st.success(f"{len(holdings)}개 종목이 성공적으로 로드되었습니다.")
@@ -249,13 +524,13 @@ def show_portfolio_rebalancing():
     with st.expander("자산 추가"):
         col1, col2, col3 = st.columns(3)
         with col1:
-            asset = st.text_input("자산 코드")
+            asset = st.text_input("자산 코드", key="manual_asset_input")
         with col2:
-            quantity = st.number_input("보유 수량", min_value=0.0)
+            quantity = st.number_input("보유 수량", min_value=0.0, key="manual_quantity_input")
         with col3:
-            price = st.number_input("현재 가격", min_value=0.0)
+            price = st.number_input("현재 가격", min_value=0.0, key="manual_price_input")
             
-        if st.button("자산 추가") and asset and quantity > 0 and price > 0:
+        if st.button("자산 추가", key="manual_add_asset") and asset and quantity > 0 and price > 0:
             if 'positions' not in st.session_state:
                 st.session_state.positions = {}
             st.session_state.positions[asset] = (quantity, price)
@@ -334,7 +609,8 @@ def show_portfolio_rebalancing():
                         f"{asset} 목표비중 (%)",
                         min_value=0,
                         max_value=100,
-                        value=default_value
+                        value=default_value,
+                        key=f"manual_weight_{asset}"
                     ) / 100
             
             # 합계 표시 및 확인
@@ -362,7 +638,8 @@ def show_portfolio_rebalancing():
                 min_value=0.0,
                 value=0.0,
                 step=100.0,
-                format="%.2f"
+                format="%.2f",
+                key="manual_portfolio_cash"
             )
         
         with col2:

@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "portfolio-backtester": {
+      "command": "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
+      "args": [
+        "/Users/soonjaekim/Desktop/SGR/SAMANDA_FE/BackTester/mcp_server/portfolio_mcp_server.py"
+      ],
+      "cwd": "/Users/soonjaekim/Desktop/SGR/SAMANDA_FE/BackTester",
+      "env": {
+        "PYTHONPATH": "/Users/soonjaekim/Desktop/SGR/SAMANDA_FE/BackTester",
+        "FASTMCP_QUIET": "1",
+        "FASTMCP_NO_BANNER": "1"
+      }
+    }
+  }
+}

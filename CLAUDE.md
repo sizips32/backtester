@@ -26,11 +26,16 @@ python run.py  # Python script method
 # Run all tests
 pytest
 
-# Run with coverage
-pytest --cov=. tests/
+# Run with coverage and HTML report
+pytest --cov=. --cov-report=html tests/
+
+# Run specific test categories
+pytest -m unit          # Unit tests only
+pytest -m integration   # Integration tests only
+pytest -m performance   # Performance tests only
 
 # Run specific test file
-pytest tests/test_repository.py
+pytest tests/test_repository.py -v
 ```
 
 ### Environment Setup
@@ -62,14 +67,14 @@ The application follows a **layered architecture** pattern with clear separation
    - `position_sizing.py`: Position size optimization
 
 3. **Service Layer** (`services/`)
-   - `data_service.py`: Unified data fetching with automatic fallback between FinanceDataReader and yfinance
-   - Implements caching, retry logic, and parallel data fetching
-   - Thread-safe operations with configurable workers
+   - `data_service.py`: Unified data fetching with yfinance as primary source and comprehensive error handling
+   - `analyzer.py`: Portfolio analysis and metrics calculation service
+   - Implements caching, retry logic, and parallel data fetching with thread-safe operations
 
 4. **Data Access Layer** (`repository/`, `utils/database.py`)
-   - SQLAlchemy ORM for portfolio persistence
-   - Repository pattern for CRUD operations
-   - SQLite with WAL mode for concurrent access
+   - SQLAlchemy ORM for portfolio persistence with full relationship mapping
+   - Repository pattern with dedicated classes: `portfolio_repo.py`, `holdings_repo.py`, `target_weights_repo.py`, `performance_repo.py`
+   - SQLite with WAL mode for concurrent access and optimized connection handling
 
 5. **Configuration System** (`config/app_config.py`)
    - Pydantic-based configuration management
@@ -111,16 +116,16 @@ The system implements a sophisticated error recovery system (`utils/error_handle
 ## Key Technical Considerations
 
 ### Data Sources
-- Primary: FinanceDataReader for Korean stocks
-- Fallback: yfinance for US stocks and when FDR fails
-- Automatic ticker format detection and cleaning
+- Primary: yfinance for all market data (FinanceDataReader removed due to availability issues)
+- Automatic ticker format detection and cleaning for Korean (.KS/.KQ) and US markets
+- Fallback mechanisms implemented for data retrieval failures
 - Support for various ticker formats (US stocks, Korean stocks with .KS/.KQ, indices with ^)
 
 ### Database Schema
-- SQLite database with SQLAlchemy ORM
-- Tables: Portfolio, TargetWeights, Holdings, Performance
-- Relationships managed through foreign keys
-- Automatic migration support via Alembic
+- SQLite database with SQLAlchemy ORM and WAL mode for performance
+- Tables: Portfolio, PortfolioHolding, PortfolioTargetWeight, PortfolioPerformance
+- Relationships managed through foreign keys with cascade operations
+- Automatic table creation via SQLAlchemy metadata
 
 ### Configuration Management
 - Pydantic models for type-safe configuration
@@ -147,15 +152,37 @@ The system implements a sophisticated error recovery system (`utils/error_handle
 
 ### Modifying Data Fetching Logic
 - Primary logic in `services/data_service.py`
-- Implement fallback in `fetch_single_stock()` method
+- Key methods: `fetch_single_stock()`, `fetch_multiple_stocks()`, `get_stock_data()`
+- Error handling through `utils/error_handler.py` with automatic retry logic
 - Update cache key generation if parameters change
+- Test both Korean (.KS/.KQ) and US market ticker formats
 
 ### Database Schema Changes
 1. Modify models in `utils/database.py`
-2. Create Alembic migration: `alembic revision --autogenerate -m "description"`
-3. Apply migration: `alembic upgrade head`
+2. Database automatically creates tables via SQLAlchemy metadata
+3. For production migrations, implement Alembic as needed
 
 ### Adding New Configuration
 1. Add Pydantic model in `config/app_config.py`
 2. Update AppSettings to include new config
 3. Access via `get_[config_name]_config()` helper function
+
+### Error Handling and Logging
+- Custom exception hierarchy in `utils/error_handler.py`
+- Decorator-based error handling with `@handle_errors` and `@error_handler`
+- Structured logging system in `utils/logger.py` with performance monitoring
+- Error recovery strategies with user-friendly messages
+
+### Testing Framework
+- Pytest configuration in `pytest.ini` with markers for different test types
+- Test categories: unit, integration, performance, benchmark
+- Coverage reporting with HTML output to `htmlcov/`
+- Mock fixtures for database sessions and external API calls
+- Performance benchmarking with `pytest-benchmark`
+
+### Development Workflow Tips
+- Use `pytest -m unit` for quick unit test runs during development
+- Check `logs/` directory for application and error logs
+- Database file located at `data/portfolio.db` (auto-created)
+- Portfolio JSON files stored in `portfolios/` directory
+- Theme system supports both dark/light modes via UI toggle

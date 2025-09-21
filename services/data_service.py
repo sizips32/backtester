@@ -103,32 +103,32 @@ class DataService:
         for attempt in range(_self.max_retries):
             try:
                 # yfinance 우선 시도
-                ticker = yf.Ticker(clean_ticker)
-                df = ticker.history(start=start_date, end=end_date)
+                ticker_obj = yf.Ticker(clean_ticker)
+                df = ticker_obj.history(start=start_date, end=end_date)
                 if not df.empty:
                     _self._cache[cache_key] = df
                     return df
-                
+
                 # yfinance 폴백
                 df = yf.download(
-                    ticker,
+                    clean_ticker,
                     start=start_date,
                     end=end_date,
                     progress=False,
                     auto_adjust=True
                 )
-                
+
                 if not df.empty:
                     _self._cache[cache_key] = df
                     return df
-                    
+
             except Exception as e:
                 if attempt < _self.max_retries - 1:
                     time.sleep(2 ** attempt)  # 지수 백오프
                     continue
                 # UI에 의존하지 않고 로깅만 수행
                 portfolio_logger.logger.error(
-                    f"DATA_FETCH_FAILED: {ticker} | Error: {str(e)}"
+                    f"DATA_FETCH_FAILED: {clean_ticker} | Error: {str(e)}"
                 )
                 
         return None

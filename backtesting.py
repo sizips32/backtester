@@ -129,13 +129,22 @@ def calculate_metrics(returns):
 def save_portfolio(name, assets, weights):
     """포트폴리오 목표 비중을 DB에 저장"""
     try:
-        portfolio_id = upsert_portfolio(name)
-        if not portfolio_id:
+        db = next(get_db())
+
+        # 포트폴리오 생성 또는 가져오기
+        portfolio = portfolio_repo.upsert_portfolio(db, name)
+        if not portfolio:
             st.error("포트폴리오를 생성/가져오지 못했습니다.")
+            db.close()
             return False
+
+        # 목표 비중 저장
         weights_clean = {asset: float(weights[asset]) for asset in assets}
-        ok = set_portfolio_target_weights(portfolio_id, weights_clean)
-        if not ok:
+        success = target_weights_repo.set_portfolio_target_weights(db, portfolio.id, weights_clean)
+
+        db.close()
+
+        if not success:
             st.error("포트폴리오 목표 비중 저장에 실패했습니다.")
             return False
         return True
@@ -145,20 +154,43 @@ def save_portfolio(name, assets, weights):
 
 def get_portfolio_list():
     """목표 비중이 설정된 포트폴리오 이름 목록(DB)"""
-    items = list_portfolios_with_target_weights()
-    return [it['name'] for it in items]
+    try:
+        db = next(get_db())
+        portfolios = portfolio_repo.get_all_portfolios(db)
+
+        # 목표 비중이 있는 포트폴리오만 필터링
+        portfolios_with_weights = []
+        for portfolio in portfolios:
+            weights = target_weights_repo.get_portfolio_target_weights(db, portfolio.id)
+            if weights:  # 목표 비중이 있는 경우만
+                portfolios_with_weights.append(portfolio.name)
+
+        db.close()
+        return portfolios_with_weights
+    except Exception as e:
+        st.error(f"포트폴리오 목록 로드 중 오류: {str(e)}")
+        return []
 
 def load_portfolio(name):
     """저장된 포트폴리오(목표 비중) 불러오기(DB)"""
     try:
-        p = get_portfolio_by_name(name)
-        if not p:
+        db = next(get_db())
+
+        # 포트폴리오 찾기
+        portfolio = portfolio_repo.get_portfolio_by_name(db, name)
+        if not portfolio:
             st.error(f"포트폴리오 '{name}'을 찾을 수 없습니다.")
+            db.close()
             return None
-        weights = get_portfolio_target_weights(p['id'])
+
+        # 목표 비중 가져오기
+        weights = target_weights_repo.get_portfolio_target_weights(db, portfolio.id)
         if not weights:
             st.error("해당 포트폴리오에 저장된 목표 비중이 없습니다.")
+            db.close()
             return None
+
+        db.close()
         return {
             'name': name,
             'assets': list(weights.keys()),
@@ -171,11 +203,19 @@ def load_portfolio(name):
 def delete_portfolio(name):
     """포트폴리오 목표 비중 삭제(DB). 포트폴리오 자체는 유지"""
     try:
-        p = get_portfolio_by_name(name)
-        if not p:
+        db = next(get_db())
+
+        # 포트폴리오 찾기
+        portfolio = portfolio_repo.get_portfolio_by_name(db, name)
+        if not portfolio:
             st.error(f"포트폴리오 '{name}'을 찾을 수 없습니다.")
+            db.close()
             return False
-        return delete_portfolio_target_weights(p['id'])
+
+        # 목표 비중 삭제
+        result = target_weights_repo.delete_portfolio_target_weights(db, portfolio.id)
+        db.close()
+        return result
     except Exception as e:
         st.error(f"포트폴리오 삭제 중 오류: {str(e)}")
         return False
@@ -445,10 +485,12 @@ def show_backtesting():
                 with st.expander("목표 비중 편집", expanded=st.session_state.get('bt_edit_weights_open', False)):
                     try:
                         # 현재 목표 비중 로드
-                        pinfo = get_portfolio_by_name(selected_portfolio)
+                        db_temp = next(get_db())
+                        portfolio_temp = portfolio_repo.get_portfolio_by_name(db_temp, selected_portfolio)
                         current_weights = {}
-                        if pinfo:
-                            current_weights = get_portfolio_target_weights(pinfo['id']) or {}
+                        if portfolio_temp:
+                            current_weights = target_weights_repo.get_portfolio_target_weights(db_temp, portfolio_temp.id) or {}
+                        db_temp.close()
                         if not current_weights:
                             # 로드된 포트폴리오의 가중치로 초기화
                             current_weights = loaded_portfolio['weights']
@@ -511,10 +553,12 @@ def show_backtesting():
                                         for err in errors:
                                             st.error(err)
                                     else:
-                                        if not pinfo:
+                                        if not portfolio_temp:
                                             st.error("포트폴리오 정보를 찾을 수 없습니다.")
                                         else:
-                                            ok = set_portfolio_target_weights(pinfo['id'], weights_new)
+                                            db_save = next(get_db())
+                                            ok = target_weights_repo.set_portfolio_target_weights(db_save, portfolio_temp.id, weights_new)
+                                            db_save.close()
                                             if ok:
                                                 st.success("목표 비중이 저장되었습니다.")
                                                 # 세션 상태 갱신

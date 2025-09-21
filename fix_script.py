@@ -1,1 +1,0 @@
-with open('portfolio_app.py', 'r') as f: lines = f.readlines(); lines[498] = lines[498].replace("format_func=lambda x: next((h['symbol'] for h in holdings if h['id'] == x),", "format_func=lambda x: next((h['symbol'] for h in holdings if h['id'] == x), ''),"); with open('portfolio_app.py', 'w') as f: f.writelines(lines); print('File updated successfully!')

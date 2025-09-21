@@ -234,99 +234,232 @@ def get_sizing_usage_guide(method: str) -> str:
 
 def show_position_sizing():
     st.header("포지션 사이징 계산기")
-    
-    # 포트폴리오 사이징 가이드 expander 추가
-    with st.expander("📚 포트폴리오 투자 시 사이징이란?", expanded=False):
-        st.markdown("""
-        # 포트폴리오 투자 시 사이징(Position Sizing)의 활용
 
-        포트폴리오 투자 시 사이징은 여러분의 자금을 **얼마나, 어떻게 나눠서 투자할지** 결정하는 핵심 전략입니다. 간단히 말해, 여러분의 투자 자금을 어떻게 효율적으로 배분할지 결정하는 방법이에요.
-        
-        ## 포지션 사이징이 필요한 상황
-        
-        1. **다양한 종목에 투자할 때**
-           - 여러 주식, ETF, 채권 등에 투자할 때 각각 얼마씩 투자할지 결정해야 합니다.
-           - "애플에 100만원, 삼성전자에 50만원..." 이런 식으로요.
-        
-        2. **리스크 관리가 필요할 때**
-           - 모든 돈을 한 종목에 투자하면 위험하죠? 사이징을 통해 위험을 분산합니다.
-           - 한 종목이 폭락해도 전체 자산에 미치는 영향을 제한할 수 있어요.
-        
-        3. **장기 투자 계획을 세울 때**
-           - 시간이 지나면서 자산 배분을 어떻게 조정할지 계획할 때 사용됩니다.
-           - 예: "나이가 들수록 주식 비중은 줄이고 채권 비중은 늘리자"
-        
-        ## 포지션 사이징 방식별 활용법
-        
+    # 포트폴리오 기반 탭 추가
+    tab1, tab2 = st.tabs(["📊 포트폴리오 기반", "📈 개별 종목"])
+
+    with tab1:
+        show_portfolio_based_sizing()
+
+    with tab2:
+        show_individual_sizing()
+
+def show_portfolio_based_sizing():
+    """포트폴리오 기반 포지션 사이징"""
+    st.subheader("🗂️ 포트폴리오 선택")
+
+    # 포트폴리오 목록 가져오기
+    try:
+        from backtesting import get_portfolio_list, load_portfolio
+        portfolio_list = get_portfolio_list()
+
+        if not portfolio_list:
+            st.warning("⚠️ 목표 비중이 설정된 포트폴리오가 없습니다.")
+            st.info("포트폴리오 관리 페이지에서 포트폴리오를 생성하거나, 백테스팅 페이지에서 목표 비중을 설정해주세요.")
+            return
+
+        selected_portfolio = st.selectbox(
+            "포트폴리오 선택",
+            portfolio_list,
+            help="목표 비중이 설정된 포트폴리오만 표시됩니다."
+        )
+
+        if selected_portfolio:
+            portfolio_data = load_portfolio(selected_portfolio)
+            if portfolio_data:
+                st.success(f"✅ '{selected_portfolio}' 포트폴리오 로드 완료")
+
+                # 포트폴리오 정보 표시
+                with st.expander("📊 포트폴리오 구성", expanded=True):
+                    col1, col2 = st.columns([2, 1])
+
+                    with col1:
+                        import pandas as pd
+                        weights_data = []
+                        for asset, weight in portfolio_data['weights'].items():
+                            weights_data.append({
+                                '자산': asset,
+                                '목표 비중': f"{weight*100:.1f}%",
+                                '비중(소수)': weight
+                            })
+
+                        weights_df = pd.DataFrame(weights_data)
+                        st.dataframe(weights_df[['자산', '목표 비중']], use_container_width=True, hide_index=True)
+
+                    with col2:
+                        st.metric("총 자산 수", len(portfolio_data['assets']))
+                        total_weight = sum(portfolio_data['weights'].values())
+                        st.metric("비중 합계", f"{total_weight*100:.1f}%")
+
+                # 투자 금액 설정
+                st.subheader("💰 투자 금액 설정")
+
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    total_investment_usd = st.number_input(
+                        "총 투자 금액 (USD)",
+                        min_value=100.0,
+                        max_value=10000000.0,
+                        value=10000.0,
+                        step=100.0,
+                        format="%.2f",
+                        key="portfolio_total_investment"
+                    )
+
+                with col2:
+                    # 환율 정보
+                    default_usd_krw, exchange_rate_updated = get_exchange_rate()
+                    usd_krw = st.number_input(
+                        "USD/KRW 환율",
+                        min_value=900.0,
+                        max_value=2000.0,
+                        value=default_usd_krw,
+                        step=0.5,
+                        format="%.2f",
+                        key="portfolio_usd_krw"
+                    )
+
+                with col3:
+                    total_investment_krw = total_investment_usd * usd_krw
+                    st.metric("총 투자 금액 (KRW)", f"₩{total_investment_krw:,.0f}")
+
+                # 포지션 사이징 계산
+                st.subheader("📊 자산별 포지션 사이징")
+
+                sizing_results = []
+                for asset, weight in portfolio_data['weights'].items():
+                    asset_investment_usd = total_investment_usd * weight
+                    asset_investment_krw = asset_investment_usd * usd_krw
+
+                    sizing_results.append({
+                        '자산': asset,
+                        '목표 비중': f"{weight*100:.1f}%",
+                        '투자 금액 (USD)': f"${asset_investment_usd:,.2f}",
+                        '투자 금액 (KRW)': f"₩{asset_investment_krw:,.0f}",
+                        '비중(숫자)': weight,
+                        '금액USD(숫자)': asset_investment_usd,
+                        '금액KRW(숫자)': asset_investment_krw
+                    })
+
+                # 결과 표시
+                results_df = pd.DataFrame(sizing_results)
+
+                # 표 표시
+                display_df = results_df[['자산', '목표 비중', '투자 금액 (USD)', '투자 금액 (KRW)']]
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+                # 차트 표시
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    import plotly.express as px
+                    fig_pie = px.pie(
+                        results_df,
+                        values='금액USD(숫자)',
+                        names='자산',
+                        title='투자 금액 분배 (USD)',
+                        hover_data=['투자 금액 (USD)']
+                    )
+                    fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                    st.plotly_chart(fig_pie, use_container_width=True)
+
+                with col2:
+                    # 상위 5개 자산 표시
+                    top5 = results_df.nlargest(5, '금액USD(숫자)')
+                    st.subheader("💎 Top 5 투자 금액")
+                    for _, row in top5.iterrows():
+                        st.metric(
+                            row['자산'],
+                            row['투자 금액 (USD)'],
+                            f"{row['목표 비중']}"
+                        )
+
+                # 다운로드 기능
+                st.subheader("💾 결과 다운로드")
+
+                # CSV 다운로드
+                csv_data = results_df[['자산', '목표 비중', '투자 금액 (USD)', '투자 금액 (KRW)']].to_csv(index=False)
+                st.download_button(
+                    label="📄 CSV 파일 다운로드",
+                    data=csv_data,
+                    file_name=f"position_sizing_{selected_portfolio}_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+
+    except ImportError:
+        st.error("❌ 포트폴리오 데이터를 로드할 수 없습니다. 백테스팅 모듈을 확인해주세요.")
+    except Exception as e:
+        st.error(f"❌ 오류 발생: {str(e)}")
+
+def show_individual_sizing():
+    """개별 종목 기반 포지션 사이징 (기존 코드)"""
+
+    # 개별 종목 사이징 가이드
+    with st.expander("📚 개별 종목 포지션 사이징이란?", expanded=False):
+        st.markdown("""
+        # 개별 종목 포지션 사이징(Position Sizing)의 활용
+
+        개별 종목 포지션 사이징은 **특정 종목에 얼마나 투자할지** 결정하는 중요한 과정입니다.
+
+        ## 주요 사이징 방식
+
         ### 1. 고정 금액 방식
-        - **활용 상황**: 정기적으로 일정 금액을 투자할 때 (적립식 투자)
-        - **예시**: 매월 급여에서 50만원씩 투자
-        - **장점**: 계산이 단순하고, 초보자도 쉽게 실천 가능
-        - **실생활 예**: "매달 주식형 펀드에 30만원, 채권형 펀드에 20만원씩 넣자"
-        
+        - **언제 사용**: 정기적으로 일정 금액을 투자할 때
+        - **예시**: 매달 애플 주식에 100만원씩 투자
+        - **장점**: 계산이 단순하고 실행하기 쉬움
+
         ### 2. 고정 비율 방식
-        - **활용 상황**: 자산 클래스별 비중을 유지하고 싶을 때
-        - **예시**: 포트폴리오의 60%는 주식, 30%는 채권, 10%는 현금
-        - **장점**: 자산 가치 변동에 따라 자동으로 비율 조정 가능(리밸런싱)
-        - **실생활 예**: "내 자산의 20%는 항상 기술주에 투자하고 싶어"
-        
+        - **언제 사용**: 전체 자산 대비 일정 비율로 투자할 때
+        - **예시**: 전체 자산의 10%를 테슬라에 투자
+        - **장점**: 자산 가치 변동에 따라 자동 조정
+
         ### 3. 리스크 기반 방식
-        - **활용 상황**: 손실 위험을 정확히 제어하고 싶을 때
-        - **예시**: 각 투자마다 총 자산의 1%만 위험에 노출
-        - **장점**: 변동성이 큰 자산에 자동으로 적은 금액을 배분
-        - **실생활 예**: "비트코인은 변동성이 크니 손실 가능성을 2%로 제한하자"
-        
-        ## 실제 활용 예시
-        
-        만약 1000만원의 투자금이 있다면:
-        
-        - **초보 투자자**: 고정 금액 방식으로 안정적인 ETF에 매달 100만원씩 투자
-        - **중급 투자자**: 고정 비율 방식으로 주식 60%, 채권 30%, 금 10% 비율 유지
-        - **전문 투자자**: 리스크 기반 방식으로 각 종목별 손실 위험을 1~2%로 제한
-        
-        ## 팁
-        
-        - 투자 경험이 적을수록 단순한 방식(고정 금액)으로 시작하세요.
-        - 경험이 쌓이면 고정 비율 방식을 도입해 자산 비중을 관리하세요.
-        - 리스크 관리 능력이 향상되면 리스크 기반 사이징을 시도해보세요.
-        - 어떤 방식을 선택하든, 꾸준함이 가장 중요합니다!
+        - **언제 사용**: 손실 위험을 정확히 제어하고 싶을 때
+        - **예시**: 비트코인 투자 시 손실을 총 자산의 2%로 제한
+        - **장점**: 변동성이 큰 자산에 대한 체계적 리스크 관리
         """)
-    
-    # 환율 정보 가져오기
+
+    # 기존 개별 종목 사이징 로직
+    show_original_individual_sizing()
+
+def show_original_individual_sizing():
+    """기존 개별 종목 사이징 로직"""
+
+    # 환율 정보
     default_usd_krw, exchange_rate_updated = get_exchange_rate()
-    
-    # 사이드바에 포지션 사이징 설명 추가
-    with st.sidebar:
+
+    with st.expander("💡 사이징 방식별 설명", expanded=False):
         st.markdown("""
             ### 📚 포지션 사이징이란?
-            각 거래에서 투자할 적절한 금액을 
+            각 거래에서 투자할 적절한 금액을
             결정하는 프로세스입니다.
-            
+
             ### 🎯 목적
             - 리스크 관리
             - 자본금 보존
             - 수익 최적화
         """)
-        
+
         st.markdown("---")
-        
+
         sizing_method = st.selectbox(
             "사이징 방식",
             ["고정 금액", "고정 비율", "리스크 기반"]
         )
-        
+
         st.markdown("### 📌 선택한 방식 설명")
         st.markdown(get_sizing_description(sizing_method))
-        
+
         st.markdown("### 🔍 사용 가이드")
         st.markdown(get_sizing_usage_guide(sizing_method))
-        
+
         st.markdown("---")
-        
+
         # 환율 정보 표시 및 수정 기능
         st.markdown("### 💱 환율 설정")
         col1, col2 = st.columns([3, 2])
-        
+
         with col1:
             usd_krw = st.number_input(
                 "USD/KRW 환율",
@@ -334,244 +467,201 @@ def show_position_sizing():
                 max_value=2000.0,
                 value=default_usd_krw,
                 step=0.5,
-                format="%.2f"
+                format="%.2f",
+                key="individual_usd_krw"
             )
-        
+
         with col2:
-            st.markdown(f"<small>마지막 업데이트:<br>{exchange_rate_updated}</small>", 
+            st.markdown(f"<small>마지막 업데이트:<br>{exchange_rate_updated}</small>",
                         unsafe_allow_html=True)
             if st.button("기본값 사용", key="reset_exchange_rate"):
                 usd_krw = default_usd_krw
                 st.rerun()
-    
+
     # 계좌 설정
     st.subheader("계좌 설정")
     col1, col2 = st.columns(2)
-    
+
     with col1:
         account_size_usd = st.number_input(
             "계좌 크기 (USD)",
-            min_value=0,
-            value=10000,
-            step=1000,
-            format="%d"
+            min_value=100.0,
+            max_value=10000000.0,
+            value=10000.0,
+            step=100.0,
+            format="%.2f",
+            key="individual_account_size"
         )
-        st.metric("원화 환산 금액", f"{account_size_usd * usd_krw:,.0f}원")
-    
+
     with col2:
-        col2_1, col2_2 = st.columns(2)
-        with col2_1:
-            risk_per_trade = st.number_input(
+        account_size_krw = account_size_usd * usd_krw
+        st.metric("계좌 크기 (KRW)", f"₩{account_size_krw:,.0f}")
+
+    # 종목 정보 입력
+    st.subheader("종목 정보")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        ticker = st.text_input("종목 코드", value="AAPL", help="예: AAPL, TSLA, MSFT 등", key="individual_ticker")
+
+    with col2:
+        entry_price = st.number_input(
+            "진입 가격 (USD)",
+            min_value=0.01,
+            value=150.0,
+            step=0.01,
+            format="%.2f",
+            key="individual_entry_price"
+        )
+
+    # 사이징 방식별 설정
+    if sizing_method == "고정 금액":
+        st.subheader("고정 금액 설정")
+        fixed_amount_usd = st.number_input(
+            "투자 금액 (USD)",
+            min_value=1.0,
+            value=1000.0,
+            step=10.0,
+            format="%.2f",
+            key="individual_fixed_amount"
+        )
+
+    elif sizing_method == "고정 비율":
+        st.subheader("고정 비율 설정")
+        fixed_percentage = st.slider(
+            "계좌 대비 투자 비율 (%)",
+            min_value=0.1,
+            max_value=50.0,
+            value=5.0,
+            step=0.1
+        )
+
+    else:  # 리스크 기반
+        st.subheader("리스크 기반 설정")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            risk_per_trade = st.slider(
                 "거래당 리스크 (%)",
                 min_value=0.1,
                 max_value=10.0,
-                value=1.0,
+                value=2.0,
                 step=0.1
-            ) / 100
-        
-        with col2_2:
-            max_position_size = st.number_input(
-                "최대 포지션 비중 (%)",
-                min_value=1,
-                max_value=100,
-                value=20,
-                step=1
-            ) / 100
-    
-    # 거래 설정 (사이징 방식에 따라 다르게 표시)
-    st.subheader(f"거래 설정 ({sizing_method})")
-    
-    # 방식에 따라 필요한 입력 필드 표시
-    if sizing_method == "고정 금액":
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            entry_price = st.number_input(
-                "진입 가격 (USD)",
-                min_value=0.01,
-                value=100.0,
-                step=1.0
             )
-            st.caption(f"≈ {entry_price * usd_krw:,.0f}원")
-        
+
         with col2:
-            fixed_amount_percent = st.slider(
-                "고정 투자 금액 (계좌 대비 %)",
+            stop_loss_pct = st.slider(
+                "손절가 (%)",
                 min_value=1.0,
-                max_value=max_position_size * 100,
-                value=5.0,
-                step=0.5
-            )
-            fixed_amount_usd = account_size_usd * (fixed_amount_percent / 100)
-            st.metric(
-                "고정 투자 금액 (USD)",
-                f"${fixed_amount_usd:,.2f}",
-                f"계좌의 {fixed_amount_percent:.1f}%"
-            )
-            
-    elif sizing_method == "고정 비율":
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            entry_price = st.number_input(
-                "진입 가격 (USD)",
-                min_value=0.01,
-                value=100.0,
-                step=1.0
-            )
-            st.caption(f"≈ {entry_price * usd_krw:,.0f}원")
-        
-        with col2:
-            account_percent = st.slider(
-                "투자 비율 (계좌 대비 %)",
-                min_value=1.0,
-                max_value=max_position_size * 100,
+                max_value=50.0,
                 value=10.0,
                 step=0.5
-            ) / 100
-            st.caption(f"최대 포지션 비중 {max_position_size*100:.0f}% 이내로 제한됩니다")
-            
-    else:  # 리스크 기반
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            entry_price = st.number_input(
-                "진입 가격 (USD)",
-                min_value=0.01,
-                value=100.0,
-                step=1.0
             )
-            st.caption(f"≈ {entry_price * usd_krw:,.0f}원")
-        
-        with col2:
-            stop_loss = st.number_input(
-                "손절 가격 (USD)",
-                min_value=0.01,
-                value=90.0,
-                step=1.0
+
+    # 계산 버튼
+    if st.button("포지션 사이즈 계산", type="primary"):
+        try:
+            config = PositionSizeConfig(
+                max_position_size=0.25,
+                risk_per_trade=risk_per_trade if sizing_method == "리스크 기반" else 2.0,
+                account_size_usd=account_size_usd,
+                exchange_rate=usd_krw
             )
-            st.caption(f"≈ {stop_loss * usd_krw:,.0f}원")
-        
-        with col3:
-            risk_multiple = st.number_input(
-                "리스크 배수",
-                min_value=0.1,
-                max_value=3.0,
-                value=1.0,
-                step=0.1
-            )
-    
-    if entry_price <= 0:
-        st.error("가격은 0보다 커야 합니다")
-        return
-        
-    if sizing_method == "리스크 기반":
-        if entry_price == stop_loss:
-            st.error("진입가와 손절가가 다르게 설정되어야 합니다")
-            return
-    
-    # 포지션 사이징 계산
-    config = PositionSizeConfig(
-        max_position_size=max_position_size,
-        risk_per_trade=risk_per_trade,
-        account_size_usd=account_size_usd,
-        exchange_rate=usd_krw
-    )
-    
-    sizer = PositionSizer(config)
-    
-    try:
-        # 선택한 방식에 따라 다른 계산 함수 호출
-        if sizing_method == "고정 금액":
-            result = sizer.calculate_fixed_amount(
-                entry_price=entry_price,
-                fixed_amount_usd=fixed_amount_usd
-            )
-        elif sizing_method == "고정 비율":
-            result = sizer.calculate_fixed_percent(
-                entry_price=entry_price,
-                account_percent=account_percent
-            )
-        else:  # 리스크 기반
-            result = sizer.calculate_risk_based(
-                entry_price=entry_price,
-                stop_loss=stop_loss,
-                risk_multiple=risk_multiple
-            )
-        
-        # 결과 표시
-        st.subheader(f"포지션 사이징 결과 ({sizing_method})")
-        
-        # 매매 수량과 투자금액 정보
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric(
-                "매매 수량",
-                f"{result['quantity']:.2f} 주"
-            )
-        
-        with col2:
-            st.metric(
-                "포지션 비중",
-                f"{result['position_value_usd']/account_size_usd:.1%}",
-                f"계좌의 {max_position_size*100:.0f}% 제한 중"
-            )
-        
-        # 포지션 금액 정보
-        st.markdown("### 투자 금액")
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric(
-                "달러 ($)",
-                f"${result['position_value_usd']:,.2f}"
-            )
-        
-        with col2:
-            st.metric(
-                "원화 기본",
-                f"{result['position_value_krw']:,.0f}원"
-            )
-            
-        with col3:
-            # 환율 변동 시나리오
-            st.metric(
-                "환율 5% 상승 시",
-                f"{result['position_value_usd'] * usd_krw * 1.05:,.0f}원"
-            )
-        
-        # 리스크 금액 정보 (리스크 기반 방식에서만 표시)
-        if sizing_method == "리스크 기반":
-            st.markdown("### 리스크 금액")
+
+            sizer = PositionSizer(config)
+
+            if sizing_method == "고정 금액":
+                result = sizer.calculate_fixed_amount(entry_price, fixed_amount_usd)
+            elif sizing_method == "고정 비율":
+                result = sizer.calculate_fixed_percentage(entry_price, fixed_percentage / 100)
+            else:  # 리스크 기반
+                stop_loss_price = entry_price * (1 - stop_loss_pct / 100)
+                result = sizer.calculate_risk_based(entry_price, stop_loss_price)
+
+            # 결과 표시
+            st.subheader("💡 계산 결과")
+
+            # 포지션 정보
+            st.markdown("### 포지션 정보")
             col1, col2, col3 = st.columns(3)
-            
+
+            with col1:
+                st.metric(
+                    "주식 수",
+                    f"{result['shares']:.2f} 주"
+                )
+
+            with col2:
+                st.metric(
+                    "포지션 크기 (%)",
+                    f"{result['position_percentage']:.2f}%"
+                )
+
+            with col3:
+                st.metric(
+                    "투자 금액 (USD)",
+                    f"${result['position_value_usd']:,.2f}"
+                )
+
+            # 원화 환산 정보
+            st.markdown("### 원화 환산")
+            col1, col2, col3 = st.columns(3)
+
             with col1:
                 st.metric(
                     "달러 ($)",
-                    f"${result['risk_amount_usd']:,.2f}",
-                    f"계좌의 {result['risk_amount_usd']/account_size_usd:.1%}"
+                    f"${result['position_value_usd']:,.2f}"
                 )
-            
+
             with col2:
                 st.metric(
                     "원화 기본",
-                    f"{result['risk_amount_krw']:,.0f}원"
+                    f"{result['position_value_krw']:,.0f}원"
                 )
-                
+
             with col3:
                 # 환율 변동 시나리오
                 st.metric(
                     "환율 5% 상승 시",
-                    f"{result['risk_amount_usd'] * usd_krw * 1.05:,.0f}원"
+                    f"{result['position_value_usd'] * usd_krw * 1.05:,.0f}원"
                 )
-        
-        # 환율 변동 관련 안내
-        st.info("""
-        💱 **환율 변동 리스크 참고 사항**
-        
-        해외 자산 거래 시 환율 변동에 따라 실제 원화 손익이 달라질 수 있습니다.
-        투자 결정 시 환율 변동성을 고려해주세요.
-        """)
-            
-    except Exception as e:
-        st.error(f"계산 중 오류 발생: {str(e)}") 
+
+            # 리스크 금액 정보 (리스크 기반 방식에서만 표시)
+            if sizing_method == "리스크 기반":
+                st.markdown("### 리스크 금액")
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    st.metric(
+                        "달러 ($)",
+                        f"${result['risk_amount_usd']:,.2f}",
+                        f"계좌의 {result['risk_amount_usd']/account_size_usd:.1%}"
+                    )
+
+                with col2:
+                    st.metric(
+                        "원화 기본",
+                        f"{result['risk_amount_krw']:,.0f}원"
+                    )
+
+                with col3:
+                    # 환율 변동 시나리오
+                    st.metric(
+                        "환율 5% 상승 시",
+                        f"{result['risk_amount_usd'] * usd_krw * 1.05:,.0f}원"
+                    )
+
+            # 환율 변동 관련 안내
+            st.info("""
+            💱 **환율 변동 리스크 참고 사항**
+
+            해외 자산 거래 시 환율 변동에 따라 실제 원화 손익이 달라질 수 있습니다.
+            투자 결정 시 환율 변동성을 고려해주세요.
+            """)
+
+        except Exception as e:
+            st.error(f"계산 중 오류 발생: {str(e)}")
+
+    # 기존의 매우 긴 사이징 가이드 제거하고 간단한 안내로 대체
+    st.markdown("---")
+    st.info("💡 **팁**: 포트폴리오 전체의 사이징을 원한다면 '포트폴리오 기반' 탭을 이용해보세요!")
