@@ -3,7 +3,7 @@ SQLAlchemy 데이터베이스 설정 및 모델 정의
 """
 
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, UniqueConstraint, event
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
 from sqlalchemy.sql import func
 from config.app_config import get_database_config
@@ -21,6 +21,16 @@ engine = create_engine(
     connect_args={"check_same_thread": False}, # Streamlit은 다중 스레드에서 실행될 수 있음
     echo=False # SQL 로그 비활성화 (디버깅 시 True로 변경)
 )
+
+# SQLite 외래키 제약 활성화 (CASCADE 동작 보장)
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):  # pragma: no cover
+    try:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+    except Exception:
+        pass
 
 # 세션 로컬 클래스 생성
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

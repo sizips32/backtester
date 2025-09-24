@@ -111,6 +111,13 @@ def show_portfolio_management(db: Session):
     tabs = st.tabs(["포트폴리오 목록", "포트폴리오 생성", "포트폴리오 편집"])
     
     with tabs[0]:
+        # 목록 상단 새로고침 버튼
+        c1, c2 = st.columns([3, 1])
+        with c2:
+            if st.button("🔄 목록 새로고침", help="포트폴리오 목록을 새로고침합니다", key="pm_list_refresh"):
+                refresh_portfolios()
+                st.rerun()
+
         portfolios = st.session_state.get('portfolios', [])
         if not portfolios:
             st.info("생성된 포트폴리오가 없습니다.")
@@ -152,6 +159,13 @@ def show_portfolio_management(db: Session):
                     st.error("포트폴리오 이름을 입력해주세요.")
 
     with tabs[2]:
+        # 편집 탭 상단 새로고침 버튼
+        c1, c2 = st.columns([3, 1])
+        with c2:
+            if st.button("🔄 목록 새로고침", help="포트폴리오 목록을 새로고침합니다", key="pm_edit_refresh"):
+                refresh_portfolios()
+                st.rerun()
+
         portfolios = st.session_state.get('portfolios', [])
         if not portfolios:
             st.info("편집할 포트폴리오가 없습니다.")
