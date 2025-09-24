@@ -247,21 +247,27 @@ def show_position_sizing():
 def show_portfolio_based_sizing():
     """포트폴리오 기반 포지션 사이징"""
     st.subheader("🗂️ 포트폴리오 선택")
+    
+    # 포트폴리오 목록 새로고침 버튼
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("🔄 목록 새로고침", help="포트폴리오 목록을 새로고침합니다", key="position_refresh"):
+            st.rerun()
 
     # 포트폴리오 목록 가져오기
     try:
-        from backtesting import get_portfolio_list, load_portfolio
-        portfolio_list = get_portfolio_list()
+        from backtesting import get_all_portfolio_list, load_portfolio
+        portfolio_list = get_all_portfolio_list()
 
         if not portfolio_list:
-            st.warning("⚠️ 목표 비중이 설정된 포트폴리오가 없습니다.")
-            st.info("포트폴리오 관리 페이지에서 포트폴리오를 생성하거나, 백테스팅 페이지에서 목표 비중을 설정해주세요.")
+            st.warning("⚠️ 저장된 포트폴리오가 없습니다.")
+            st.info("포트폴리오 관리 페이지에서 포트폴리오를 생성해주세요.")
             return
 
         selected_portfolio = st.selectbox(
             "포트폴리오 선택",
             portfolio_list,
-            help="목표 비중이 설정된 포트폴리오만 표시됩니다."
+            help="모든 포트폴리오가 표시됩니다. 목표 비중이 없는 포트폴리오는 보유 종목을 기반으로 동일 비중으로 설정됩니다."
         )
 
         if selected_portfolio:

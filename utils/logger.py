@@ -9,6 +9,10 @@ import os
 import json
 import traceback
 from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except Exception:  # pragma: no cover
+    ZoneInfo = None
 from typing import Dict, Any, Optional
 from pathlib import Path
 import streamlit as st
@@ -196,7 +200,12 @@ class StreamlitLogHandler(logging.Handler):
         """로그 레코드를 Streamlit UI에 표시"""
         try:
             msg = self.format(record)
-            timestamp = datetime.fromtimestamp(record.created).strftime('%H:%M:%S')
+            # 타임존: Asia/Seoul 적용
+            if ZoneInfo is not None:
+                tz = ZoneInfo("Asia/Seoul")
+                timestamp = datetime.fromtimestamp(record.created, tz).strftime('%H:%M:%S')
+            else:
+                timestamp = datetime.fromtimestamp(record.created).strftime('%H:%M:%S')
             
             # 로그 레벨별 색상
             if record.levelno >= logging.ERROR:
@@ -263,7 +272,12 @@ class LogAnalyzer:
                 "top_errors": {}
             }
             
-            cutoff_time = datetime.now().timestamp() - (hours * 3600)
+            # 타임존: Asia/Seoul 기준으로 최근 hours 계산
+            if ZoneInfo is not None:
+                now_ts = datetime.now(ZoneInfo("Asia/Seoul")).timestamp()
+            else:
+                now_ts = datetime.now().timestamp()
+            cutoff_time = now_ts - (hours * 3600)
             
             with open(self.log_file, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -274,7 +288,10 @@ class LogAnalyzer:
                         if ' | ' in line:
                             timestamp_str = line.split(' | ')[0]
                             try:
-                                log_time = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S,%f').timestamp()
+                                dt_parsed = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S,%f')
+                                if ZoneInfo is not None:
+                                    dt_parsed = dt_parsed.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                                log_time = dt_parsed.timestamp()
                                 if log_time < cutoff_time:
                                     continue
                             except ValueError:

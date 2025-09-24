@@ -149,32 +149,49 @@ def show_portfolio_rebalancing():
 def show_saved_portfolio_rebalancing():
     """저장된 포트폴리오별 리밸런싱"""
     st.subheader("저장된 포트폴리오 리밸런싱")
+    
+    # 포트폴리오 목록 새로고침 버튼
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("🔄 목록 새로고침", help="포트폴리오 목록을 새로고침합니다"):
+            st.rerun()
 
     # 저장된 포트폴리오 목록 가져오기
     db = next(get_db())
     try:
         portfolios = get_all_portfolios(db)
 
-        # 목표 비중이 있는 포트폴리오만 필터링
-        portfolios_with_weights = []
+        # 목표 비중 또는 보유 종목이 있는 포트폴리오만 필터링
+        portfolios_with_data = []
         for portfolio in portfolios:
             weights = get_portfolio_target_weights(db, portfolio.id)
-            if weights:
-                portfolios_with_weights.append({
+            holdings = get_portfolio_holdings(db, portfolio.id)
+
+            if weights or holdings:
+                # 목표 비중이 있으면 사용, 없으면 보유 종목을 기반으로 동일 비중 설정
+                if weights:
+                    target_weights = weights
+                else:
+                    # 보유 종목을 기반으로 동일 비중 설정
+                    assets = [holding.symbol for holding in holdings]
+                    equal_weight = 1.0 / len(assets)
+                    target_weights = {asset: equal_weight for asset in assets}
+                
+                portfolios_with_data.append({
                     'id': portfolio.id,
                     'name': portfolio.name,
                     'description': portfolio.description,
-                    'weights': weights
+                    'weights': target_weights
                 })
     finally:
         db.close()
 
-    if not portfolios_with_weights:
-        st.warning("리밸런싱할 수 있는 포트폴리오가 없습니다. 포트폴리오 관리에서 목표 비중을 설정해주세요.")
+    if not portfolios_with_data:
+        st.warning("리밸런싱할 수 있는 포트폴리오가 없습니다. 포트폴리오 관리에서 목표 비중을 설정하거나 종목을 추가해주세요.")
         return
 
     # 포트폴리오 선택
-    portfolio_names = [p['name'] for p in portfolios_with_weights]
+    portfolio_names = [p['name'] for p in portfolios_with_data]
     selected_portfolio_name = st.selectbox(
         "리밸런싱할 포트폴리오를 선택하세요:",
         portfolio_names
@@ -184,7 +201,7 @@ def show_saved_portfolio_rebalancing():
         st.stop()
 
     # 선택된 포트폴리오 정보 가져오기
-    selected_portfolio = next(p for p in portfolios_with_weights if p['name'] == selected_portfolio_name)
+    selected_portfolio = next(p for p in portfolios_with_data if p['name'] == selected_portfolio_name)
     portfolio_id = selected_portfolio['id']
     target_weights = selected_portfolio['weights']
 

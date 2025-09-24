@@ -171,8 +171,20 @@ def get_portfolio_list():
         st.error(f"포트폴리오 목록 로드 중 오류: {str(e)}")
         return []
 
+def get_all_portfolio_list():
+    """모든 포트폴리오 이름 목록(DB) - 목표 비중 유무와 관계없이"""
+    try:
+        db = next(get_db())
+        portfolios = portfolio_repo.get_all_portfolios(db)
+        portfolio_names = [portfolio.name for portfolio in portfolios]
+        db.close()
+        return portfolio_names
+    except Exception as e:
+        st.error(f"포트폴리오 목록 로드 중 오류: {str(e)}")
+        return []
+
 def load_portfolio(name):
-    """저장된 포트폴리오(목표 비중) 불러오기(DB)"""
+    """저장된 포트폴리오(목표 비중 또는 보유 종목) 불러오기(DB)"""
     try:
         db = next(get_db())
 
@@ -185,17 +197,36 @@ def load_portfolio(name):
 
         # 목표 비중 가져오기
         weights = target_weights_repo.get_portfolio_target_weights(db, portfolio.id)
-        if not weights:
-            st.error("해당 포트폴리오에 저장된 목표 비중이 없습니다.")
+        
+        if weights:
+            # 목표 비중이 있는 경우
             db.close()
-            return None
-
-        db.close()
-        return {
-            'name': name,
-            'assets': list(weights.keys()),
-            'weights': weights
-        }
+            return {
+                'name': name,
+                'assets': list(weights.keys()),
+                'weights': weights
+            }
+        else:
+            # 목표 비중이 없는 경우, 보유 종목을 기반으로 동일 비중 설정
+            from repository.holdings_repo import get_portfolio_holdings
+            holdings = get_portfolio_holdings(db, portfolio.id)
+            
+            if not holdings:
+                st.error("해당 포트폴리오에 목표 비중도 보유 종목도 없습니다.")
+                db.close()
+                return None
+            
+            # 보유 종목을 기반으로 동일 비중 설정
+            assets = [holding.symbol for holding in holdings]
+            equal_weight = 1.0 / len(assets)
+            weights = {asset: equal_weight for asset in assets}
+            
+            db.close()
+            return {
+                'name': name,
+                'assets': assets,
+                'weights': weights
+            }
     except Exception as e:
         st.error(f"포트폴리오 로드 중 오류: {str(e)}")
         return None
@@ -387,14 +418,22 @@ def show_backtesting():
     # 기존 포트폴리오 선택 탭
     with tab1:
         st.subheader("포트폴리오 관리에 저장된 포트폴리오")
-        portfolio_list = get_portfolio_list()
         
-        if not portfolio_list:
+        # 포트폴리오 목록 새로고침 버튼
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            if st.button("🔄 목록 새로고침", help="포트폴리오 목록을 새로고침합니다", key="backtest_refresh"):
+                st.rerun()
+        
+        # 모든 포트폴리오 목록 가져오기
+        all_portfolios = get_all_portfolio_list()
+        
+        if not all_portfolios:
             st.info("저장된 포트폴리오가 없습니다. 새 포트폴리오를 생성해주세요.")
         else:
             # 모든 포트폴리오 정보를 테이블로 표시
             all_portfolios_data = []
-            for p_name in portfolio_list:
+            for p_name in all_portfolios:
                 p_data = load_portfolio(p_name)
                 if p_data:
                     # 자산과 비중을 문자열로 변환
@@ -425,7 +464,7 @@ def show_backtesting():
             # 포트폴리오 선택
             selected_portfolio = st.selectbox(
                 "백테스팅할 포트폴리오 선택",
-                options=portfolio_list,
+                options=all_portfolios,
                 index=0,
                 key="existing_portfolio_select"
             )
@@ -438,11 +477,20 @@ def show_backtesting():
                 
                 # 포트폴리오 정보 표시
                 st.subheader(f"포트폴리오 정보: {loaded_portfolio['name']}")
+                
+                # 비중 정보 표시
                 weights_df = pd.DataFrame({
                     '자산': loaded_portfolio['assets'],
                     '비중(%)': [loaded_portfolio['weights'][asset] * 100 
                                for asset in loaded_portfolio['assets']]
                 })
+                
+                # 비중 정보 설명 추가
+                total_weight = sum(loaded_portfolio['weights'].values())
+                if abs(total_weight - 1.0) < 0.01:
+                    st.info("✅ 목표 비중이 설정된 포트폴리오입니다.")
+                else:
+                    st.info("ℹ️ 보유 종목을 기반으로 동일 비중으로 설정된 포트폴리오입니다.")
                 
                 # 2열 레이아웃으로 표시
                 col1, col2 = st.columns([1, 1])
@@ -761,6 +809,8 @@ def show_backtesting():
                                 'name': new_portfolio_name,
                                 'source': 'new'
                             }
+                            # 포트폴리오 목록 새로고침을 위한 플래그 설정
+                            st.session_state.portfolio_list_updated = True
                             st.rerun()
     
     # 선택된 포트폴리오가 없는 경우
@@ -970,24 +1020,34 @@ def show_backtesting():
             st.error("포트폴리오 이름을 입력하세요.")
         else:
             try:
-                portfolio_id = upsert_portfolio(perf_name.strip())
-                if not portfolio_id:
-                    st.error("포트폴리오 생성/조회에 실패했습니다.")
-                else:
-                    pv = portfolio_value
-                    dr = pv.pct_change()
-                    saved = 0
-                    for dt, val in pv.items():
-                        daily = dr.loc[dt] if dt in dr.index else None
-                        daily_val = None if (daily is None or pd.isna(daily)) else float(daily)
-                        ok = record_portfolio_performance(
-                            portfolio_id,
-                            dt.strftime('%Y-%m-%d'),
-                            float(val),
-                            daily_val
-                        )
-                        if ok:
-                            saved += 1
-                    st.success(f"성과 기록 저장 완료: {saved}건 저장")
+                # DB 세션 준비
+                db = next(get_db())
+                try:
+                    # 포트폴리오 생성/가져오기
+                    portfolio = portfolio_repo.upsert_portfolio(db, perf_name.strip())
+                    if not portfolio:
+                        st.error("포트폴리오 생성/조회에 실패했습니다.")
+                    else:
+                        pv = portfolio_value
+                        dr = pv.pct_change()
+                        saved = 0
+                        for dt, val in pv.items():
+                            daily = dr.loc[dt] if dt in dr.index else None
+                            daily_val = None if (daily is None or pd.isna(daily)) else float(daily)
+                            ok = performance_repo.record_portfolio_performance(
+                                db,
+                                portfolio.id,
+                                dt.strftime('%Y-%m-%d'),
+                                float(val),
+                                daily_val
+                            )
+                            if ok:
+                                saved += 1
+                        st.success(f"성과 기록 저장 완료: {saved}건 저장")
+                finally:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
             except Exception as e:
                 st.error(f"성과 기록 저장 중 오류: {str(e)}")

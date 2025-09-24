@@ -202,11 +202,13 @@ def add_investment(db: Session, portfolio_id, symbol, quantity, purchase_price, 
     # 종목 코드 검증
     valid, msg = validate_ticker(symbol)
     if not valid:
-        st.sidebar.error(f"{symbol}: {msg}")
+        error_msg = msg if msg else "종목 코드 검증 실패"
+        st.sidebar.error(f"{symbol}: {error_msg}")
         return False
     
     # 자산 데이터 검증
-    asset_valid, asset_errors = DataValidator.validate_asset_data(
+    validator = DataValidator()
+    asset_valid, asset_errors = validator.validate_asset_data(
         asset_type, quantity, purchase_price
     )
     
@@ -479,8 +481,21 @@ def show_portfolio_holdings(db: Session):
             if not all_perf_rows:
                 st.info("저장된 성과 이력이 없습니다. 백테스트 결과 화면에서 '성과 기록 저장'을 먼저 수행하세요.")
             else:
-                base_df = pd.DataFrame(all_perf_rows)
-                base_df['date'] = pd.to_datetime(base_df['date'])
+                # ORM 객체를 안전하게 DataFrame으로 변환
+                base_df = pd.DataFrame([
+                    {
+                        'date': getattr(row, 'date', None),
+                        'total_value': getattr(row, 'total_value', None),
+                        'daily_return': getattr(row, 'daily_return', None),
+                    }
+                    for row in all_perf_rows
+                    if row is not None
+                ])
+                if base_df.empty or 'date' not in base_df.columns:
+                    st.info("저장된 성과 이력이 없습니다. 백테스트 결과 화면에서 '성과 기록 저장'을 먼저 수행하세요.")
+                    return
+                base_df['date'] = pd.to_datetime(base_df['date'], errors='coerce')
+                base_df = base_df.dropna(subset=['date'])
                 base_df = base_df.sort_values('date')
                 base_df['total_value'] = pd.to_numeric(base_df['total_value'], errors='coerce')
                 if 'daily_return' in base_df.columns:
@@ -999,6 +1014,7 @@ def show_portfolio_analysis():
         for symbol in symbols:
             valid, error_msg = validate_ticker(symbol)
             if not valid:
+                error_msg = error_msg if error_msg else "종목 코드 검증 실패"
                 invalid_symbols.append((symbol, error_msg))
         
         if invalid_symbols:

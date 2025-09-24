@@ -104,6 +104,12 @@ def show_asset_allocation():
 def show_saved_portfolio_allocation():
     """저장된 포트폴리오별 자산 배분 최적화"""
     st.subheader("저장된 포트폴리오 자산 배분 최적화")
+    
+    # 포트폴리오 목록 새로고침 버튼
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("🔄 목록 새로고침", help="포트폴리오 목록을 새로고침합니다", key="allocation_refresh"):
+            st.rerun()
 
     # 저장된 포트폴리오 목록 가져오기
     db = next(get_db())

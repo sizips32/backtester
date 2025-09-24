@@ -98,6 +98,38 @@ class ValidationConfig(BaseModel):
         'CRYPTO': r'^[A-Z]{3,10}-[A-Z]{3,4}$',
         'ETF': r'^[A-Z]{3,5}$',
     }
+    asset_limits: Dict[str, Dict[str, float]] = {
+        'Stock': {
+            'min_quantity': 0.001,
+            'min_price': 0.01,
+            'max_price': 10000.0
+        },
+        'Bond': {
+            'min_quantity': 0.001,
+            'min_price': 0.01,
+            'max_price': 10000.0
+        },
+        'ETF': {
+            'min_quantity': 0.001,
+            'min_price': 0.01,
+            'max_price': 10000.0
+        },
+        'Crypto': {
+            'min_quantity': 0.00000001,
+            'min_price': 0.000001,
+            'max_price': 1000000.0
+        },
+        'Cash': {
+            'min_quantity': 0.01,
+            'min_price': 1.0,
+            'max_price': 1.0
+        },
+        'Commodity': {
+            'min_quantity': 0.001,
+            'min_price': 0.01,
+            'max_price': 100000.0
+        }
+    }
     max_portfolio_assets: int = 50
     weight_tolerance: float = Field(0.01, gt=0, lt=1)
     max_single_asset_weight: float = Field(0.5, gt=0, le=1)

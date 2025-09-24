@@ -25,11 +25,11 @@ from utils.logger import show_log_dashboard
 # 상수 정의
 MENU_OPTIONS = {
     "💼 포트폴리오 관리": render_portfolio_content,
+    "📈 백테스팅": show_backtesting,
     "📊 리스크 분석": show_risk_analysis,
     "⚖️ 자산 배분": show_asset_allocation,
     "🔄 포트폴리오 리밸런싱": show_portfolio_rebalancing,
     "📏 포지션 사이징": show_position_sizing,
-    "📈 백테스팅": show_backtesting,
     "📋 시스템 로그": show_log_dashboard
 }
 

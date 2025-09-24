@@ -123,6 +123,12 @@ def show_risk_analysis():
 def show_saved_portfolio_risk_analysis():
     """저장된 포트폴리오별 리스크 분석"""
     st.subheader("저장된 포트폴리오 리스크 분석")
+    
+    # 포트폴리오 목록 새로고침 버튼
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("🔄 목록 새로고침", help="포트폴리오 목록을 새로고침합니다", key="risk_refresh"):
+            st.rerun()
 
     # 저장된 포트폴리오 목록 가져오기
     db = next(get_db())
