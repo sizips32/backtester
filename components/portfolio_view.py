@@ -206,7 +206,7 @@ def show_portfolio_management(db: Session):
                     st.success("목표 비중이 저장되었습니다.")
 
 # 종목 추가 함수
-def add_investment(db: Session, portfolio_id, symbol, quantity, purchase_price, purchase_date, asset_type):
+def add_investment(db: Session, portfolio_id, symbol, quantity, purchase_price, purchase_date, asset_type, currency='USD'):
     # 사용자 액션 로깅
     log_user_action("add_investment", 
                    portfolio_id=portfolio_id, 
@@ -223,7 +223,7 @@ def add_investment(db: Session, portfolio_id, symbol, quantity, purchase_price, 
     # 자산 데이터 검증
     validator = DataValidator()
     asset_valid, asset_errors = validator.validate_asset_data(
-        asset_type, quantity, purchase_price
+        asset_type, quantity, purchase_price, currency
     )
     
     if not asset_valid:
@@ -240,7 +240,8 @@ def add_investment(db: Session, portfolio_id, symbol, quantity, purchase_price, 
             quantity, 
             purchase_price, 
             purchase_date, 
-            asset_type
+            asset_type,
+            currency
         )
         
         if holding:
@@ -378,11 +379,55 @@ def show_portfolio_holdings(db: Session):
                         '손익': gain_loss,
                         '손익(%)': gain_loss_pct,
                         '자산유형': holding.asset_type,
+                        '통화': getattr(holding, 'currency', 'USD'),
                         '매수일': holding.purchase_date or '정보 없음'
                     })
             
             # 데이터프레임 생성
             df = pd.DataFrame(holdings_data)
+            
+            # 통화별 포트폴리오 평가
+            if not df.empty:
+                st.subheader("💱 통화별 포트폴리오 평가")
+                
+                # 통화별 집계
+                currency_summary = df.groupby('통화').agg({
+                    '시장가치': 'sum',
+                    '손익': 'sum',
+                    '종목': 'count'
+                }).round(2)
+                currency_summary.columns = ['총 시장가치', '총 손익', '종목 수']
+                
+                # 환율 정보 가져오기
+                from services.data_service import data_service
+                usd_krw_rate = data_service.get_exchange_rate('USD', 'KRW')
+                
+                if usd_krw_rate:
+                    # USD 기준으로 통일된 평가
+                    usd_total = currency_summary.loc['USD', '총 시장가치'] if 'USD' in currency_summary.index else 0
+                    krw_total = currency_summary.loc['KRW', '총 시장가치'] if 'KRW' in currency_summary.index else 0
+                    krw_to_usd = krw_total / usd_krw_rate if krw_total > 0 else 0
+                    
+                    # USD 기준 통합 평가
+                    total_usd_value = usd_total + krw_to_usd
+                    total_krw_value = total_usd_value * usd_krw_rate
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("USD 기준 총 자산", f"${total_usd_value:,.2f}")
+                    with col2:
+                        st.metric("KRW 기준 총 자산", f"₩{total_krw_value:,.0f}")
+                    with col3:
+                        st.metric("현재 USD/KRW 환율", f"{usd_krw_rate:,.2f}")
+                    with col4:
+                        st.metric("통화별 종목 수", f"USD: {currency_summary.loc['USD', '종목 수'] if 'USD' in currency_summary.index else 0}개, KRW: {currency_summary.loc['KRW', '종목 수'] if 'KRW' in currency_summary.index else 0}개")
+                    
+                    # 통화별 상세 정보
+                    st.subheader("통화별 상세 정보")
+                    st.dataframe(currency_summary, use_container_width=True)
+                else:
+                    st.warning("환율 정보를 가져올 수 없습니다.")
+                    st.dataframe(currency_summary, use_container_width=True)
             
             # 종목별 시장가치 비중 계산
             if total_value > 0:
@@ -776,6 +821,13 @@ def show_portfolio_holdings(db: Session):
                         ['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity'],
                         key='main_asset_type'
                     )
+                    # 통화 선택 추가
+                    currency = st.selectbox(
+                        '통화',
+                        ['USD', 'KRW'],
+                        key='main_currency',
+                        help='한국 종목은 KRW, 미국 종목은 USD를 선택하세요'
+                    )
                     submitted = st.form_submit_button('종목 추가', use_container_width=True)
                     
                     if submitted:
@@ -786,7 +838,8 @@ def show_portfolio_holdings(db: Session):
                             quantity,
                             purchase_price,
                             purchase_date.strftime('%Y-%m-%d'),
-                            asset_type
+                            asset_type,
+                            currency
                         ):
                             st.success('종목이 성공적으로 추가되었습니다!')
                             st.rerun()
@@ -1764,6 +1817,12 @@ def render_portfolio_content():
                 '자산 유형',
                 ['Stock', 'Bond', 'ETF', 'Crypto', 'Cash', 'Commodity']
             )
+            # 통화 선택 추가
+            currency = st.selectbox(
+                '통화',
+                ['USD', 'KRW'],
+                help='한국 종목은 KRW, 미국 종목은 USD를 선택하세요'
+            )
             submitted = st.form_submit_button('종목 추가', use_container_width=True)
 
             if submitted:
@@ -1777,7 +1836,8 @@ def render_portfolio_content():
                         quantity,
                         purchase_price,
                         purchase_date.strftime('%Y-%m-%d'),
-                        asset_type
+                        asset_type,
+                        currency
                     ):
                         st.sidebar.success('종목이 성공적으로 추가되었습니다!')
                         st.rerun()

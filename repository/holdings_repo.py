@@ -7,7 +7,7 @@ from utils.database import PortfolioHolding
 def get_portfolio_holdings(db: Session, portfolio_id: int):
     return db.query(PortfolioHolding).filter(PortfolioHolding.portfolio_id == portfolio_id).order_by(PortfolioHolding.symbol).all()
 
-def add_holding_to_portfolio(db: Session, portfolio_id: int, symbol: str, quantity: float, purchase_price: float, purchase_date: str, asset_type: str):
+def add_holding_to_portfolio(db: Session, portfolio_id: int, symbol: str, quantity: float, purchase_price: float, purchase_date: str, asset_type: str, currency: str = 'USD'):
     # 중복 체크
     db_holding = db.query(PortfolioHolding).filter_by(portfolio_id=portfolio_id, symbol=symbol).first()
     
@@ -17,6 +17,7 @@ def add_holding_to_portfolio(db: Session, portfolio_id: int, symbol: str, quanti
         new_purchase_price = ((db_holding.purchase_price * db_holding.quantity) + (purchase_price * quantity)) / new_quantity
         db_holding.quantity = new_quantity
         db_holding.purchase_price = new_purchase_price
+        db_holding.currency = currency  # 통화 정보 업데이트
     else:
         # 새로 추가
         db_holding = PortfolioHolding(
@@ -25,7 +26,8 @@ def add_holding_to_portfolio(db: Session, portfolio_id: int, symbol: str, quanti
             quantity=quantity,
             purchase_price=purchase_price,
             purchase_date=purchase_date,
-            asset_type=asset_type
+            asset_type=asset_type,
+            currency=currency
         )
         db.add(db_holding)
         

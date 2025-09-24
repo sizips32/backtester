@@ -53,11 +53,25 @@ class DataService:
         )
     
     def _clean_ticker(self, ticker: str) -> str:
-        """티커 심볼 정리"""
-        if self._is_korean_stock(ticker):
-            return ticker.replace('.KS', '').replace('.KQ', '')
-        # 지수 데이터의 경우 ^ 기호를 유지해야 함
-        return ticker
+        """티커 심볼 정리
+        - 한국 종목 처리: 6자리 숫자는 기본적으로 .KS를 붙임, 이미 접미사가 있으면 유지
+        - 그 외는 원본 유지 (지수의 ^ 포함)
+        """
+        t = ticker.strip()
+        if t.endswith('.KS') or t.endswith('.KQ'):
+            return t
+        if len(t) == 6 and t.isdigit():
+            return f"{t}.KS"
+        return t
+
+    def _korean_ticker_variants(self, ticker: str) -> List[str]:
+        """한국 종목일 경우 시도할 심볼 변형 목록 (.KS 우선, 이후 .KQ)"""
+        t = ticker.strip()
+        if t.endswith('.KS') or t.endswith('.KQ'):
+            return [t]
+        if len(t) == 6 and t.isdigit():
+            return [f"{t}.KS", f"{t}.KQ"]
+        return [t]
     
     @st.cache_data(ttl=3600)
     def fetch_single_stock(
@@ -98,38 +112,39 @@ class DataService:
         if cache_key in _self._cache:
             return _self._cache[cache_key]
         
-        clean_ticker = _self._clean_ticker(ticker)
-        
-        for attempt in range(_self.max_retries):
-            try:
-                # yfinance 우선 시도
-                ticker_obj = yf.Ticker(clean_ticker)
-                df = ticker_obj.history(start=start_date, end=end_date)
-                if not df.empty:
-                    _self._cache[cache_key] = df
-                    return df
+        # 한국 종목의 경우 여러 변형을 시도 (.KS -> .KQ)
+        candidates = _self._korean_ticker_variants(ticker)
+        for sym in candidates:
+            for attempt in range(_self.max_retries):
+                try:
+                    # yfinance 우선 시도
+                    ticker_obj = yf.Ticker(sym)
+                    df = ticker_obj.history(start=start_date, end=end_date)
+                    if df is not None and not df.empty:
+                        _self._cache[cache_key] = df
+                        return df
 
-                # yfinance 폴백
-                df = yf.download(
-                    clean_ticker,
-                    start=start_date,
-                    end=end_date,
-                    progress=False,
-                    auto_adjust=True
-                )
+                    # yfinance 폴백
+                    df = yf.download(
+                        sym,
+                        start=start_date,
+                        end=end_date,
+                        progress=False,
+                        auto_adjust=True
+                    )
 
-                if not df.empty:
-                    _self._cache[cache_key] = df
-                    return df
+                    if df is not None and not df.empty:
+                        _self._cache[cache_key] = df
+                        return df
 
-            except Exception as e:
-                if attempt < _self.max_retries - 1:
-                    time.sleep(2 ** attempt)  # 지수 백오프
-                    continue
-                # UI에 의존하지 않고 로깅만 수행
-                portfolio_logger.logger.error(
-                    f"DATA_FETCH_FAILED: {clean_ticker} | Error: {str(e)}"
-                )
+                except Exception as e:
+                    if attempt < _self.max_retries - 1:
+                        time.sleep(2 ** attempt)  # 지수 백오프
+                        continue
+                    # UI에 의존하지 않고 로깅만 수행
+                    portfolio_logger.logger.error(
+                        f"DATA_FETCH_FAILED: {sym} | Error: {str(e)}"
+                    )
                 
         return None
     
@@ -217,45 +232,45 @@ class DataService:
         Returns:
             (현재가, 에러메시지) 튜플
         """
-        clean_ticker = self._clean_ticker(ticker)
-        
-        # 1) yfinance 시도 (실패해도 폴백 계속)
-        try:
-            ticker = yf.Ticker(clean_ticker)
-            df = ticker.history(period="1d")
-            if df is not None and not df.empty:
-                price = df['Close'].iloc[-1]
-                return (float(price) if price is not None else None), None
-        except Exception:
-            pass
+        # 한국 종목 변형을 모두 시도
+        for sym in self._korean_ticker_variants(ticker):
+            # 1) yfinance 시도 (실패해도 폴백 계속)
+            try:
+                tk = yf.Ticker(sym)
+                df = tk.history(period="1d")
+                if df is not None and not df.empty:
+                    price = df['Close'].iloc[-1]
+                    return (float(price) if price is not None else None), None
+            except Exception:
+                pass
 
-        # 2) yfinance.history 시도
-        try:
-            ticker_obj = yf.Ticker(ticker)
-            hist = ticker_obj.history(period="1d", auto_adjust=True)
-            if hist is not None and not hist.empty:
-                price = hist['Close'].iloc[-1]
-                return (float(price) if price is not None else None), None
-        except Exception:
-            pass
+            # 2) yfinance.history 시도
+            try:
+                ticker_obj = yf.Ticker(sym)
+                hist = ticker_obj.history(period="1d", auto_adjust=True)
+                if hist is not None and not hist.empty:
+                    price = hist['Close'].iloc[-1]
+                    return (float(price) if price is not None else None), None
+            except Exception:
+                pass
 
-        # 3) yfinance.fast_info 시도
-        try:
-            fi = getattr(yf.Ticker(ticker), 'fast_info', None)
-            if fi and getattr(fi, 'last_price', None) is not None:
-                return float(fi.last_price), None
-        except Exception:
-            pass
+            # 3) yfinance.fast_info 시도
+            try:
+                fi = getattr(yf.Ticker(sym), 'fast_info', None)
+                if fi and getattr(fi, 'last_price', None) is not None:
+                    return float(fi.last_price), None
+            except Exception:
+                pass
 
-        # 4) yfinance.info 시도
-        try:
-            info = yf.Ticker(ticker).info
-            price_fields = ['regularMarketPrice', 'currentPrice', 'price']
-            for field in price_fields:
-                if field in info and info[field] is not None:
-                    return float(info[field]), None
-        except Exception:
-            pass
+            # 4) yfinance.info 시도
+            try:
+                info = yf.Ticker(sym).info
+                price_fields = ['regularMarketPrice', 'currentPrice', 'price']
+                for field in price_fields:
+                    if field in info and info[field] is not None:
+                        return float(info[field]), None
+            except Exception:
+                pass
         
         return None, "가격 정보를 찾을 수 없습니다"
     
@@ -349,6 +364,78 @@ class DataService:
         
         return True, "데이터 품질 검증 통과"
     
+    @st.cache_data(ttl=3600)
+    def get_exchange_rate(_self, from_currency: str, to_currency: str, date: datetime = None) -> Optional[float]:
+        """
+        환율 정보 가져오기
+        
+        Args:
+            from_currency: 기준 통화 (예: 'USD')
+            to_currency: 대상 통화 (예: 'KRW')
+            date: 환율 조회 날짜 (기본값: 현재)
+            
+        Returns:
+            환율 또는 None
+        """
+        if date is None:
+            date = _self._now()
+        
+        # USD/KRW 환율 조회
+        if from_currency == 'USD' and to_currency == 'KRW':
+            try:
+                # USD/KRW 환율 티커 (여러 변형 시도)
+                tickers = ["USDKRW=X", "USD/KRW", "USDKRW"]
+                for ticker_symbol in tickers:
+                    try:
+                        ticker = yf.Ticker(ticker_symbol)
+                        df = ticker.history(start=date, end=date + timedelta(days=1), period="1d")
+                        if not df.empty:
+                            return float(df['Close'].iloc[-1])
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        
+        # KRW/USD 환율 조회 (역환율)
+        elif from_currency == 'KRW' and to_currency == 'USD':
+            try:
+                # USD/KRW 환율을 먼저 가져온 후 역환율 계산
+                usd_krw_rate = _self.get_exchange_rate('USD', 'KRW', date)
+                if usd_krw_rate:
+                    return 1.0 / usd_krw_rate
+            except Exception:
+                pass
+        
+        # 환율 조회 실패 시 기본값 사용 (대략적인 환율)
+        if from_currency == 'USD' and to_currency == 'KRW':
+            return 1400.0  # 대략적인 USD/KRW 환율
+        elif from_currency == 'KRW' and to_currency == 'USD':
+            return 1.0 / 1400.0  # 대략적인 KRW/USD 환율
+        
+        return None
+    
+    def convert_currency(self, amount: float, from_currency: str, to_currency: str, date: datetime = None) -> Optional[float]:
+        """
+        통화 변환
+        
+        Args:
+            amount: 변환할 금액
+            from_currency: 기준 통화
+            to_currency: 대상 통화
+            date: 환율 기준 날짜
+            
+        Returns:
+            변환된 금액 또는 None
+        """
+        if from_currency == to_currency:
+            return amount
+        
+        rate = self.get_exchange_rate(from_currency, to_currency, date)
+        if rate is not None:
+            return amount * rate
+        
+        return None
+
     def clear_cache(self) -> None:
         """캐시 초기화"""
         self._cache.clear()

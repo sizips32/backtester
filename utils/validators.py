@@ -90,7 +90,8 @@ class DataValidator:
         self, 
         asset_type: str, 
         quantity: float, 
-        price: float
+        price: float,
+        currency: str = 'USD'
     ) -> Tuple[bool, List[str]]:
         """
         자산 데이터 검증
@@ -99,6 +100,7 @@ class DataValidator:
             asset_type: 자산 유형
             quantity: 수량
             price: 가격
+            currency: 통화 (USD, KRW)
             
         Returns:
             (유효성, 에러메시지 리스트)
@@ -117,13 +119,26 @@ class DataValidator:
         elif quantity < rules['min_quantity']:
             errors.append(f"수량이 너무 작습니다. 최소 {rules['min_quantity']} 이상이어야 합니다.")
         
-        # 가격 검증
+        # 가격 검증 (통화별로 다른 기준 적용)
         if price <= 0:
             errors.append("가격은 0보다 커야 합니다.")
-        elif price < rules['min_price']:
-            errors.append(f"가격이 너무 낮습니다. 최소 ${rules['min_price']} 이상이어야 합니다.")
-        elif price > rules['max_price']:
-            errors.append(f"가격이 너무 높습니다. 최대 ${rules['max_price']} 이하여야 합니다.")
+        else:
+            # 통화별 가격 검증 기준
+            if currency == 'KRW':
+                # 한국 주식의 경우 원화 기준으로 검증 (현실적인 범위)
+                min_price_krw = 100  # ₩100 (최소 주가)
+                max_price_krw = 1000000  # ₩1,000,000 (최대 주가)
+                
+                if price < min_price_krw:
+                    errors.append(f"가격이 너무 낮습니다. 최소 ₩{min_price_krw:,} 이상이어야 합니다.")
+                elif price > max_price_krw:
+                    errors.append(f"가격이 너무 높습니다. 최대 ₩{max_price_krw:,} 이하여야 합니다.")
+            else:
+                # USD 기준 검증
+                if price < rules['min_price']:
+                    errors.append(f"가격이 너무 낮습니다. 최소 ${rules['min_price']} 이상이어야 합니다.")
+                elif price > rules['max_price']:
+                    errors.append(f"가격이 너무 높습니다. 최대 ${rules['max_price']} 이하여야 합니다.")
         
         return len(errors) == 0, errors
     

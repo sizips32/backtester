@@ -64,6 +64,7 @@ class PortfolioHolding(Base):
     purchase_price = Column(Float, nullable=False, default=0)
     purchase_date = Column(String) # 날짜를 문자열로 저장 (YYYY-MM-DD)
     asset_type = Column(String, default='Stock')
+    currency = Column(String, default='USD') # 통화 정보 추가 (USD, KRW)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
