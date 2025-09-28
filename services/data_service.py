@@ -36,13 +36,30 @@ class DataService:
         self.max_workers = api_config.max_workers
         self.timeout = api_config.timeout_seconds
         self.max_retries = api_config.max_retries
-        self._cache = {}
+        self._cache: Dict[str, Tuple[pd.DataFrame, datetime]] = {}
         self._now = lambda: datetime.now()
-        
+
     def _get_cache_key(self, ticker: str, start_date: str, end_date: str) -> str:
         """캐시 키 생성"""
         key_string = f"{ticker}_{start_date}_{end_date}"
         return hashlib.md5(key_string.encode()).hexdigest()
+
+    def _get_cached_data(self, cache_key: str) -> Optional[pd.DataFrame]:
+        """In-memory cache lookup with TTL support."""
+        entry = self._cache.get(cache_key)
+        if not entry:
+            return None
+
+        data, expires_at = entry
+        if self._now() >= expires_at:
+            self._cache.pop(cache_key, None)
+            return None
+        return data
+
+    def _set_cached_data(self, cache_key: str, data: pd.DataFrame) -> None:
+        """Store data with expiration aligned to app configuration."""
+        expires_at = self._now() + timedelta(seconds=self.cache_ttl)
+        self._cache[cache_key] = (data, expires_at)
     
     def _is_korean_stock(self, ticker: str) -> bool:
         """한국 주식 여부 확인"""
@@ -109,8 +126,9 @@ class DataService:
         )
         
         # 캐시 확인
-        if cache_key in _self._cache:
-            return _self._cache[cache_key]
+        cached_data = _self._get_cached_data(cache_key)
+        if cached_data is not None:
+            return cached_data
         
         # 한국 종목의 경우 여러 변형을 시도 (.KS -> .KQ)
         candidates = _self._korean_ticker_variants(ticker)
@@ -121,7 +139,7 @@ class DataService:
                     ticker_obj = yf.Ticker(sym)
                     df = ticker_obj.history(start=start_date, end=end_date)
                     if df is not None and not df.empty:
-                        _self._cache[cache_key] = df
+                        _self._set_cached_data(cache_key, df)
                         return df
 
                     # yfinance 폴백
@@ -134,7 +152,7 @@ class DataService:
                     )
 
                     if df is not None and not df.empty:
-                        _self._cache[cache_key] = df
+                        _self._set_cached_data(cache_key, df)
                         return df
 
                 except Exception as e:
@@ -384,7 +402,8 @@ class DataService:
         if from_currency == 'USD' and to_currency == 'KRW':
             try:
                 # USD/KRW 환율 티커 (여러 변형 시도)
-                tickers = ["USDKRW=X", "USD/KRW", "USDKRW"]
+                # "USD/KRW"는 yfinance에서 지원하지 않으므로 제거
+                tickers = ["USDKRW=X", "KRW=X"]
                 for ticker_symbol in tickers:
                     try:
                         ticker = yf.Ticker(ticker_symbol)

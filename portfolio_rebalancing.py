@@ -69,25 +69,31 @@ class PortfolioRebalancer:
     ) -> Dict[str, float]:
         """
         필요한 매매 수량 계산
-        
+
         Args:
             positions: 현재 포지션
             cash: 사용 가능한 현금
-            
+
         Returns:
             자산별 매매 수량 (양수: 매수, 음수: 매도)
         """
         # 현재 비중 계산
-        current_weight_values = self.calculate_current_weights(positions)
         total_value = sum(qty * price for qty, price in positions.values()) + cash
-        
-        trades = {}
-        for asset, (qty, price) in positions.items():
+
+        trades: Dict[str, float] = {}
+        all_assets = set(self.target_weights.keys()).union(positions.keys())
+
+        for asset in all_assets:
+            qty, price = positions.get(asset, (0.0, None))
+            if not price or price <= 0:
+                # 가격 정보가 없으면 거래 계산 불가
+                continue
+
             target_value = total_value * self.target_weights.get(asset, 0)
             current_value = qty * price
             value_difference = target_value - current_value
             trades[asset] = value_difference / price
-            
+
         return trades
 
 def get_rebalancing_description(method: str) -> str:
@@ -257,10 +263,31 @@ def show_saved_portfolio_rebalancing():
             '손익률': ((current_price - purchase_price) / purchase_price) * 100 if purchase_price > 0 else 0
         })
 
+    # 목표 비중에는 있지만 현재 보유하지 않은 자산 처리
+    missing_assets = [symbol for symbol in target_weights.keys() if symbol not in current_positions]
+    for symbol in missing_assets:
+        price, error_msg = data_service.get_current_price(symbol)
+        if price is None:
+            st.warning(f"{symbol}: 현재가 정보를 가져올 수 없어 리밸런싱 계산에서 제외됩니다.")
+            continue
+
+        current_positions[symbol] = (0.0, price)
+        position_data.append({
+            '자산': symbol,
+            '수량': 0.0,
+            '매수가($)': price,
+            '현재가($)': price,
+            '평가금액($)': 0.0,
+            '손익률': 0.0
+        })
+
     # 현재 포트폴리오 표시
     portfolio_df = pd.DataFrame(position_data)
     total_value = portfolio_df['평가금액($)'].sum()
-    portfolio_df['현재 비중'] = portfolio_df['평가금액($)'] / total_value
+    if total_value > 0:
+        portfolio_df['현재 비중'] = portfolio_df['평가금액($)'] / total_value
+    else:
+        portfolio_df['현재 비중'] = 0.0
 
     st.dataframe(portfolio_df.style.format({
         '수량': '{:.2f}',

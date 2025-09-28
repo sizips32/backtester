@@ -106,11 +106,14 @@ def calculate_metrics(returns):
     monthly_return = returns.groupby(pd.Grouper(freq='ME')).apply(
         lambda x: (1 + x).prod() - 1
     )
-    avg_monthly_return = monthly_return.mean()
-    monthly_vol = monthly_return.std()
-    
-    # 양의 수익률과 음의 수익률 비율
-    positive_months = (monthly_return > 0).sum() / len(monthly_return)
+    if monthly_return.empty:
+        avg_monthly_return = np.nan
+        monthly_vol = np.nan
+        positive_months = np.nan
+    else:
+        avg_monthly_return = monthly_return.mean()
+        monthly_vol = monthly_return.std()
+        positive_months = (monthly_return > 0).sum() / len(monthly_return)
     
     return {
         "연간 수익률": annual_return,

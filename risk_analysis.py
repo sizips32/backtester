@@ -73,14 +73,24 @@ def calculate_cvar(returns, confidence_level=0.95):
         return 0
 
 def calculate_sortino_ratio(returns, risk_free_rate=0.02):
+    """Sortino ratio using downside deviation for daily returns."""
     try:
         returns = returns.dropna()
         if len(returns) < 2:
             return 0
-        excess_returns = returns.mean() * 252 - risk_free_rate
-        downside_returns = returns[returns < 0]
-        downside_std = downside_returns.std()
-        return np.sqrt(252) * excess_returns.mean() / downside_std if downside_std != 0 else 0
+
+        # Convert to excess daily returns so annualised figures are consistent with Sharpe.
+        excess_daily_returns = returns - (risk_free_rate / 252)
+        downside_returns = excess_daily_returns[excess_daily_returns < 0]
+        if downside_returns.empty:
+            return 0
+
+        annualised_excess_return = excess_daily_returns.mean() * 252
+        downside_deviation = downside_returns.std() * np.sqrt(252)
+        if downside_deviation == 0:
+            return 0
+
+        return annualised_excess_return / downside_deviation
     except Exception as e:
         st.error(f"Sortino Ratio 계산 중 오류 발생: {str(e)}")
         return 0
