@@ -295,6 +295,9 @@ def show_portfolio_holdings(db: Session):
         # 보유 종목 조회
         holdings = holdings_repo.get_portfolio_holdings(db, st.session_state.current_portfolio_id)
         
+        # 목표 비중 조회
+        target_weights = target_weights_repo.get_portfolio_target_weights(db, st.session_state.current_portfolio_id)
+        
         if holdings:
             # 티커 목록 추출 및 표시
             tickers = [holding.symbol for holding in holdings]
@@ -1028,7 +1031,64 @@ def show_portfolio_holdings(db: Session):
                                 st.info("삭제가 취소되었습니다.")
                                 st.rerun()
         else:
-            st.info("편집할 포트폴리오를 선택해주세요.")
+            # 보유 종목이 없을 때 목표 비중 표시
+            if target_weights:
+                st.subheader("📊 목표 비중 구성")
+                st.info("이 포트폴리오는 목표 비중만 설정되어 있습니다. 실제 보유 종목을 추가하려면 사이드바의 '신규 포트폴리오 종목 추가' 섹션을 사용하세요.")
+                
+                # 목표 비중 표시
+                weights_df = pd.DataFrame([
+                    {"종목": symbol, "목표 비중(%)": weight * 100}
+                    for symbol, weight in sorted(target_weights.items(), key=lambda x: x[1], reverse=True)
+                ])
+                
+                # 비중 파이 차트
+                fig = go.Figure(data=[go.Pie(
+                    labels=weights_df['종목'],
+                    values=weights_df['목표 비중(%)'],
+                    hole=0.3,
+                    textinfo='label+percent',
+                    marker_colors=px.colors.qualitative.Pastel
+                )])
+                fig.update_layout(
+                    title="목표 비중 분포",
+                    height=500
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # 목표 비중 테이블
+                st.dataframe(weights_df, use_container_width=True, hide_index=True)
+                
+                # 자산 클래스별 분류
+                st.subheader("📈 자산 클래스별 분류")
+                
+                # 자산 클래스 분류 (간단한 분류)
+                asset_classification = {
+                    'Stock': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'ORCL'],
+                    'ETF': ['SPY', 'QQQ', 'TLT', 'LQD', 'VNQ', 'DBC'],
+                    'Crypto': ['BTC-USD'],
+                    'Commodity': ['GLD'],
+                    'Cash': ['CASH']
+                }
+                
+                class_weights = {}
+                for symbol, weight in target_weights.items():
+                    for asset_class, symbols in asset_classification.items():
+                        if symbol in symbols:
+                            class_weights[asset_class] = class_weights.get(asset_class, 0) + weight
+                            break
+                    else:
+                        class_weights['기타'] = class_weights.get('기타', 0) + weight
+                
+                class_df = pd.DataFrame([
+                    {"자산 클래스": asset_class, "비중(%)": weight * 100}
+                    for asset_class, weight in sorted(class_weights.items(), key=lambda x: x[1], reverse=True)
+                ])
+                
+                st.dataframe(class_df, use_container_width=True, hide_index=True)
+                
+            else:
+                st.info("이 포트폴리오에는 아직 종목이나 목표 비중이 설정되지 않았습니다. 포트폴리오에 종목을 추가하거나 목표 비중을 설정해주세요.")
 
 # 포트폴리오 분석 화면
 def show_portfolio_analysis():
