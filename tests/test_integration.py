@@ -117,8 +117,9 @@ class TestPortfolioWorkflow:
 
     def test_portfolio_holdings_integration(self, db_session):
         """포트폴리오 보유 종목 통합 테스트"""
-        # 포트폴리오 생성
-        portfolio = portfolio_repo.create_portfolio(db_session, '홀딩스 테스트', '')
+        # 포트폴리오 생성 (Unique name using timestamp)
+        unique_name = f'홀딩스 테스트 {datetime.now().timestamp()}'
+        portfolio = portfolio_repo.create_portfolio(db_session, unique_name, '')
 
         # 보유 종목 추가
         holdings_data = [
@@ -127,7 +128,7 @@ class TestPortfolioWorkflow:
         ]
 
         for holding in holdings_data:
-            holdings_repo.add_holding(
+            holdings_repo.add_holding_to_portfolio(
                 db_session, portfolio.id, holding['symbol'],
                 holding['quantity'], holding['purchase_price'],
                 datetime.now(), 'US_STOCK'
@@ -181,8 +182,8 @@ class TestBacktestingIntegration:
 
         metrics = backtesting.calculate_metrics(returns)
 
-        # 필수 지표들이 계산되었는지 확인
-        required_metrics = ['annual_return', 'annual_vol', 'sharpe_ratio', 'max_drawdown']
+        # 필수 지표들이 계산되었는지 확인 (한국어 키 사용)
+        required_metrics = ['연간 수익률', '연간 변동성', 'Sharpe Ratio', 'Maximum Drawdown']
         for metric in required_metrics:
             assert metric in metrics
             assert not pd.isna(metrics[metric])
@@ -210,64 +211,86 @@ class TestDataValidationIntegration:
 
     def test_ticker_validation_integration(self, validator):
         """티커 검증 통합 테스트"""
-        # 다양한 형태의 티커 테스트
-        test_cases = [
-            ('AAPL', True),      # US 주식
-            ('005930', True),    # 한국 주식
-            ('005930.KS', True), # 한국 주식 (KS)
-            ('INVALID_TICKER_NAME', False),  # 무효한 티커
-            ('', False),         # 빈 문자열
-            (None, False)        # None
-        ]
+        # Mock 설정: fetch_single_stock이 항상 데이터를 반환하도록 설정
+        mock_data = pd.DataFrame({'Close': [100, 101]})
+        
+        with patch('services.data_service.DataService.fetch_single_stock', return_value=mock_data):
+            # 다양한 형태의 티커 테스트
+            test_cases = [
+                ('AAPL', True),      # US 주식
+                ('005930', True),    # 한국 주식
+                ('005930.KS', True), # 한국 주식 (KS)
+            ]
 
-        for ticker, expected in test_cases:
-            result = validator.validate_ticker(ticker)
-            assert result == expected, f"Ticker {ticker} validation failed"
+            for ticker, expected in test_cases:
+                result = validator.validate_ticker(ticker)
+                # validate_ticker returns (is_valid, message, type)
+                assert result[0] == expected, f"Ticker {ticker} validation failed"
+            
+        # 실패 케이스 테스트 (Mock이 None 반환)
+        with patch('services.data_service.DataService.fetch_single_stock', return_value=None):
+            fail_cases = [
+                ('INVALID_TICKER_NAME', False),
+                ('', False),
+                (None, False)
+            ]
+            
+            for ticker, expected in fail_cases:
+                result = validator.validate_ticker(ticker)
+                assert result[0] == expected, f"Ticker {ticker} validation failed"
 
 class TestSystemIntegration:
     """시스템 전체 통합 테스트"""
 
-    @patch('services.data_service.DataService.fetch_single_stock')
-    def test_end_to_end_portfolio_analysis(self, mock_fetch, db_session):
+    @pytest.fixture
+    def db_session(self):
+        """테스트용 DB 세션"""
+        db = next(get_db())
+        yield db
+        db.close()
+
+    def test_end_to_end_portfolio_analysis(self, db_session):
         """End-to-End 포트폴리오 분석 테스트"""
         # Mock 데이터 설정
         mock_data = pd.DataFrame({
             'Close': np.random.randn(50).cumsum() + 100
         }, index=pd.date_range('2023-01-01', periods=50))
-        mock_fetch.return_value = mock_data
 
-        # 1. 포트폴리오 생성
-        portfolio = portfolio_repo.create_portfolio(db_session, 'E2E 테스트', '')
+        with patch('services.data_service.DataService.fetch_single_stock', return_value=mock_data):
+            # 1. 포트폴리오 생성
+            unique_name = f'E2E 테스트 {datetime.now().timestamp()}'
+            portfolio = portfolio_repo.create_portfolio(db_session, unique_name, '')
 
-        # 2. 목표 비중 설정
-        weights = {'AAPL': 0.5, 'GOOGL': 0.5}
-        target_weights_repo.set_portfolio_target_weights(db_session, portfolio.id, weights)
+            # 2. 목표 비중 설정
+            weights = {'AAPL': 0.5, 'GOOGL': 0.5}
+            target_weights_repo.set_portfolio_target_weights(db_session, portfolio.id, weights)
 
-        # 3. 데이터 가져오기
-        data_service = DataService()
-        start_date = datetime.now() - timedelta(days=60)
-        end_date = datetime.now()
+            # 3. 데이터 가져오기
+            data_service = DataService()
+            start_date = datetime.now() - timedelta(days=60)
+            end_date = datetime.now()
 
-        portfolio_data = {}
-        for ticker in weights.keys():
-            data = data_service.fetch_single_stock(ticker, start_date, end_date)
-            if data is not None:
-                portfolio_data[ticker] = data
+            portfolio_data = {}
+            for ticker in weights.keys():
+                data = data_service.fetch_single_stock(ticker, start_date, end_date)
+                if data is not None:
+                    # DataFrame에서 Series 추출 (Close)
+                    portfolio_data[ticker] = data['Close']
 
-        # 4. 백테스트 실행
-        if len(portfolio_data) >= 2:
-            price_df = pd.DataFrame(portfolio_data)
-            portfolio_value = backtesting.calculate_portfolio_value(price_df, weights)
-            returns = portfolio_value.pct_change().dropna()
-            metrics = backtesting.calculate_metrics(returns)
+            # 4. 백테스트 실행
+            if len(portfolio_data) >= 2:
+                price_df = pd.DataFrame(portfolio_data)
+                portfolio_value = backtesting.calculate_portfolio_value(price_df, weights)
+                returns = portfolio_value.pct_change().dropna()
+                metrics = backtesting.calculate_metrics(returns)
 
-            # 결과 검증
-            assert len(portfolio_value) > 0
-            assert 'sharpe_ratio' in metrics
-            assert not pd.isna(metrics['sharpe_ratio'])
+                # 결과 검증
+                assert len(portfolio_value) > 0
+                assert 'Sharpe Ratio' in metrics
+                assert not pd.isna(metrics['Sharpe Ratio'])
 
-        # 5. 정리
-        portfolio_repo.delete_portfolio(db_session, portfolio.id)
+            # 5. 정리
+            portfolio_repo.delete_portfolio(db_session, portfolio.id)
 
     def test_error_handling_integration(self):
         """에러 처리 통합 테스트"""

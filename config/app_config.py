@@ -91,10 +91,10 @@ class LoggingConfig(BaseModel):
 class ValidationConfig(BaseModel):
     ticker_patterns: Dict[str, str] = {
         'US_STOCK': r'^[A-Z]{1,5}$',
-        'US_INDEX': r'^\\[A-Z0-9]{1,10}$',
-        'KR_STOCK': r'^\\d{6}$',
-        'KR_STOCK_KS': r'^\\d{6}\\.KS$',
-        'KR_STOCK_KQ': r'^\\d{6}\\.KQ$',
+        'US_INDEX': r'^\^[A-Z0-9]{1,10}$',  # Yahoo Finance index starts with ^
+        'KR_STOCK': r'^\d{6}$',
+        'KR_STOCK_KS': r'^\d{6}\.KS$',
+        'KR_STOCK_KQ': r'^\d{6}\.KQ$',
         'CRYPTO': r'^[A-Z]{3,10}-[A-Z]{3,4}$',
         'ETF': r'^[A-Z]{3,5}$',
     }

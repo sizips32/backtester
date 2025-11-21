@@ -52,33 +52,33 @@ class ThemeManager:
         
         if st.session_state.get('dark_mode', False):
             return {
-                'background': '#0E1117',
-                'surface': '#1C1C1C',
-                'primary': base_colors['primary'],
-                'secondary': '#03DAC6',
-                'text': '#FAFAFA',
-                'text_secondary': '#B0B0B0',
-                'border': '#404040',
-                'success': base_colors['success'],
-                'warning': base_colors['warning'],
-                'danger': base_colors['danger'],
-                'info': base_colors['info'],
-                'card_shadow': 'rgba(255,255,255,0.1)'
+                'background': '#0f172a',  # Deep Navy/Black
+                'surface': 'rgba(30, 41, 59, 0.7)', # Glassy dark
+                'primary': '#00f260',     # Neon Green
+                'secondary': '#0575e6',   # Neon Blue
+                'text': '#f8fafc',        # White-ish
+                'text_secondary': '#94a3b8', # Slate
+                'border': 'rgba(148, 163, 184, 0.1)',
+                'success': '#00f260',
+                'warning': '#f59e0b',
+                'danger': '#ef4444',
+                'info': '#3b82f6',
+                'card_shadow': '0 8px 32px 0 rgba(0, 0, 0, 0.37)'
             }
         else:
             return {
-                'background': '#FFFFFF',
-                'surface': base_colors['light'],
-                'primary': base_colors['primary'],
-                'secondary': '#DC004E',
-                'text': base_colors['dark'],
-                'text_secondary': '#6C757D',
-                'border': '#DEE2E6',
-                'success': base_colors['success'],
-                'warning': base_colors['warning'],
-                'danger': base_colors['danger'],
-                'info': base_colors['info'],
-                'card_shadow': 'rgba(0,0,0,0.1)'
+                'background': '#f8fafc',
+                'surface': 'rgba(255, 255, 255, 0.8)',
+                'primary': '#0575e6',
+                'secondary': '#00f260',
+                'text': '#1e293b',
+                'text_secondary': '#64748b',
+                'border': 'rgba(226, 232, 240, 0.8)',
+                'success': '#10b981',
+                'warning': '#f59e0b',
+                'danger': '#ef4444',
+                'info': '#3b82f6',
+                'card_shadow': '0 8px 32px 0 rgba(31, 38, 135, 0.1)'
             }
     
     def apply_custom_css(self) -> None:
@@ -91,297 +91,173 @@ class ThemeManager:
         
         css = f"""
         <style>
+        /* Google Fonts import */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
         /* 전역 스타일 */
+        .stApp {{
+            background-color: {theme['background']};
+            font-family: 'Inter', sans-serif;
+        }}
+        
         .main .block-container {{
             padding-top: {'1rem' if is_mobile else '2rem'};
             padding-bottom: 2rem;
-            padding-left: {'0.5rem' if is_mobile else '1rem'};
-            padding-right: {'0.5rem' if is_mobile else '1rem'};
-            max-width: {'100%' if is_mobile else '1200px'};
+            padding-left: {'0.5rem' if is_mobile else '2rem'};
+            padding-right: {'0.5rem' if is_mobile else '2rem'};
+            max-width: 100%;
         }}
         
-        /* 향상된 메트릭 카드 */
-        .enhanced-metric-card {{
-            background: linear-gradient(135deg, {theme['surface']}, {theme['background']});
-            padding: {'1rem' if is_mobile else '1.5rem'};
-            border-radius: 16px;
+        /* Neo-Glass Card */
+        .glass-card {{
+            background: {theme['surface']};
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
             border: 1px solid {theme['border']};
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: {theme['card_shadow']};
+            transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+            margin-bottom: 1.5rem;
+        }}
+        
+        .glass-card:hover {{
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.25);
+            border-color: {theme['primary']}80;
+        }}
+
+        /* Enhanced Metric Card (New) */
+        .enhanced-metric-card {{
+            background: {theme['surface']};
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid {theme['border']};
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: {theme['card_shadow']};
+            transition: transform 0.3s ease;
             margin-bottom: 1rem;
-            box-shadow: 0 4px 12px {theme['card_shadow']};
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }}
         
         .enhanced-metric-card:hover {{
-            transform: translateY(-4px);
-            box-shadow: 0 8px 24px {theme['card_shadow']};
             border-color: {theme['primary']};
+            box-shadow: 0 8px 32px 0 {theme['primary']}20;
         }}
         
-        .metric-title {{
-            color: {theme['text_secondary']};
-            font-size: {'0.8rem' if is_mobile else '0.875rem'};
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 0.5rem;
-        }}
-        
-        .metric-value {{
-            color: {theme['text']};
-            font-size: {'1.5rem' if is_mobile else '2rem'};
-            font-weight: 700;
-            margin-bottom: 0.25rem;
-            background: linear-gradient(45deg, {theme['primary']}, {theme['secondary']});
+        /* Neon Text Gradients */
+        .neon-text {{
+            background: linear-gradient(to right, {theme['primary']}, {theme['secondary']});
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
+            font-weight: 800;
         }}
         
-        .metric-delta {{
-            font-size: {'0.75rem' if is_mobile else '0.875rem'};
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 0.25rem;
-        }}
-        
-        /* 반응형 차트 컨테이너 */
-        .chart-container {{
-            background: {theme['surface']};
-            border-radius: 16px;
-            padding: {'0.5rem' if is_mobile else '1rem'};
-            border: 1px solid {theme['border']};
-            margin-bottom: 1rem;
-            box-shadow: 0 4px 12px {theme['card_shadow']};
-        }}
-        
-        /* 모바일 최적화 */
-        @media (max-width: 768px) {{
-            .main .block-container {{
-                padding-left: 0.5rem;
-                padding-right: 0.5rem;
-            }}
-            
-            .enhanced-metric-card {{
-                padding: 1rem;
-                margin-bottom: 0.75rem;
-            }}
-            
-            .metric-value {{
-                font-size: 1.25rem;
-            }}
-        }}
-        
-        /* 향상된 프로그레스 바 */
-        .custom-progress-container {{
-            background: {theme['border']};
-            border-radius: 10px;
-            height: 10px;
-            overflow: hidden;
-            margin: 0.75rem 0;
-            position: relative;
-        }}
-        
-        .custom-progress-fill {{
-            background: linear-gradient(90deg, {theme['primary']}, {theme['secondary']});
-            height: 100%;
-            border-radius: 10px;
-            transition: width 0.8s ease;
-            position: relative;
-            overflow: hidden;
-        }}
-        
-        .custom-progress-fill::before {{
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-            animation: shimmer 2s infinite;
-        }}
-        
-        @keyframes shimmer {{
-            0% {{ transform: translateX(-100%); }}
-            100% {{ transform: translateX(100%); }}
-        }}
-        
-        /* 향상된 버튼 스타일 */
-        .stButton > button {{
+        .metric-value {{
+            font-size: clamp(1.5rem, 2.5vw, 2.5rem);
+            font-weight: 700;
             background: linear-gradient(135deg, {theme['primary']}, {theme['secondary']});
-            color: white;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin: 0.5rem 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        
+        .metric-label {{
+            color: {theme['text_secondary']};
+            font-size: 0.875rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }}
+        
+        /* Gradient Buttons */
+        .stButton > button {{
+            background: linear-gradient(90deg, {theme['primary']}, {theme['secondary']});
+            color: #ffffff;
             border: none;
             border-radius: 12px;
-            padding: {'0.5rem 1rem' if is_mobile else '0.75rem 1.5rem'};
+            padding: 0.75rem 1.5rem;
             font-weight: 600;
-            font-size: {'0.875rem' if is_mobile else '1rem'};
             transition: all 0.3s ease;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            box-shadow: 0 4px 15px {theme['primary']}40;
         }}
         
         .stButton > button:hover {{
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+            box-shadow: 0 8px 25px {theme['primary']}60;
             filter: brightness(1.1);
         }}
         
-        .stButton > button:active {{
-            transform: translateY(0);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        /* Sidebar Styling */
+        [data-testid="stSidebar"] {{
+            background-color: {theme['background']};
+            border-right: 1px solid {theme['border']};
         }}
         
-        /* 향상된 알림 스타일 */
-        .custom-alert {{
-            padding: {'0.75rem' if is_mobile else '1rem'};
-            border-radius: 12px;
-            margin: 1rem 0;
-            border-left: 4px solid;
-            backdrop-filter: blur(10px);
-            font-weight: 500;
-        }}
-        
-        .alert-success {{
-            background: linear-gradient(135deg, {theme['success']}20, {theme['success']}10);
-            border-color: {theme['success']};
-            color: {theme['success']};
-        }}
-        
-        .alert-warning {{
-            background: linear-gradient(135deg, {theme['warning']}20, {theme['warning']}10);
-            border-color: {theme['warning']};
-            color: {theme['warning']};
-        }}
-        
-        .alert-error {{
-            background: linear-gradient(135deg, {theme['danger']}20, {theme['danger']}10);
-            border-color: {theme['danger']};
-            color: {theme['danger']};
-        }}
-        
-        .alert-info {{
-            background: linear-gradient(135deg, {theme['info']}20, {theme['info']}10);
-            border-color: {theme['info']};
-            color: {theme['info']};
-        }}
-        
-        /* 로딩 애니메이션 */
-        .custom-loading {{
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 2rem;
-            text-align: center;
-        }}
-        
-        .loading-spinner {{
-            width: 50px;
-            height: 50px;
-            border: 4px solid {theme['border']};
-            border-top: 4px solid {theme['primary']};
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-bottom: 1rem;
-        }}
-        
-        @keyframes spin {{
-            0% {{ transform: rotate(0deg); }}
-            100% {{ transform: rotate(360deg); }}
-        }}
-        
-        .loading-dots {{
-            display: flex;
-            gap: 0.25rem;
-            justify-content: center;
-        }}
-        
-        .loading-dot {{
-            width: 8px;
-            height: 8px;
-            background: {theme['primary']};
-            border-radius: 50%;
-            animation: bounce 1.4s ease-in-out infinite both;
-        }}
-        
-        .loading-dot:nth-child(1) {{ animation-delay: -0.32s; }}
-        .loading-dot:nth-child(2) {{ animation-delay: -0.16s; }}
-        
-        @keyframes bounce {{
-            0%, 80%, 100% {{
-                transform: scale(0);
-            }} 40% {{
-                transform: scale(1);
-            }}
-        }}
-        
-        /* 섹션 헤더 개선 */
-        .section-header {{
+        /* Input Fields */
+        .stTextInput > div > div > input, .stSelectbox > div > div {{
+            background-color: {theme['surface']};
             color: {theme['text']};
-            font-size: {'1.25rem' if is_mobile else '1.5rem'};
-            font-weight: 700;
-            margin: {'1rem 0 0.75rem 0' if is_mobile else '2rem 0 1rem 0'};
-            padding-bottom: 0.5rem;
-            border-bottom: 3px solid;
-            border-image: linear-gradient(90deg, {theme['primary']}, {theme['secondary']}) 1;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
+            border: 1px solid {theme['border']};
+            border-radius: 10px;
         }}
         
-        /* 데이터 테이블 개선 */
+        .stTextInput > div > div > input:focus, .stSelectbox > div > div:focus-within {{
+            border-color: {theme['primary']};
+            box-shadow: 0 0 0 2px {theme['primary']}33;
+        }}
+        
+        /* Dataframes */
         .stDataFrame {{
+            border: 1px solid {theme['border']};
             border-radius: 12px;
             overflow: hidden;
-            border: 1px solid {theme['border']};
-            box-shadow: 0 4px 12px {theme['card_shadow']};
         }}
         
-        /* 사이드바 커스텀: 내부 클래스 의존 제거 (의도적으로 비움) */
+        /* Tabs */
+        .stTabs [data-baseweb="tab-list"] {{
+            gap: 8px;
+            background-color: transparent;
+        }}
         
-        /* 스크롤바 개선 */
+        .stTabs [data-baseweb="tab"] {{
+            height: 50px;
+            white-space: pre-wrap;
+            background-color: {theme['surface']};
+            border-radius: 8px;
+            border: 1px solid {theme['border']};
+            color: {theme['text_secondary']};
+            font-weight: 600;
+        }}
+        
+        .stTabs [aria-selected="true"] {{
+            background-color: {theme['surface']};
+            border: 1px solid {theme['primary']};
+            color: {theme['primary']};
+        }}
+        
+        /* Scrollbar */
         ::-webkit-scrollbar {{
             width: 8px;
             height: 8px;
         }}
-        
         ::-webkit-scrollbar-track {{
-            background: {theme['surface']};
-            border-radius: 4px;
+            background: {theme['background']}; 
         }}
-        
         ::-webkit-scrollbar-thumb {{
-            background: linear-gradient(135deg, {theme['primary']}, {theme['secondary']});
+            background: {theme['border']}; 
             border-radius: 4px;
         }}
-        
         ::-webkit-scrollbar-thumb:hover {{
-            background: {theme['primary']};
-        }}
-        
-        /* 입력 필드 개선 */
-        .stSelectbox > div > div {{
-            border-radius: 8px;
-            border: 2px solid {theme['border']};
-            transition: border-color 0.3s ease;
-        }}
-        
-        .stSelectbox > div > div:focus-within {{
-            border-color: {theme['primary']};
-            box-shadow: 0 0 0 3px {theme['primary']}33;
-        }}
-        
-        .stTextInput > div > div > input {{
-            border-radius: 8px;
-            border: 2px solid {theme['border']};
-            transition: border-color 0.3s ease;
-        }}
-        
-        .stTextInput > div > div > input:focus {{
-            border-color: {theme['primary']};
-            box-shadow: 0 0 0 3px {theme['primary']}33;
+            background: {theme['text_secondary']}; 
         }}
         </style>
         """

@@ -40,34 +40,23 @@ def safe_calculation(func):
             return 0
     return wrapper
 
+from modules.risk_engine import RiskEngine
+
 @safe_calculation
 def calculate_var(returns, confidence_level=0.95):
-    if len(returns.dropna()) < 2:
-        raise RiskAnalysisError("충분한 데이터가 없습니다")
-    return np.percentile(returns.dropna(), (1 - confidence_level) * 100)
+    return RiskEngine.calculate_var(returns, confidence_level)
 
 def calculate_sharpe_ratio(returns, risk_free_rate=0.02):
     """샤프 비율 계산"""
     try:
-        returns = returns.dropna()
-        if len(returns) < 2:
-            return 0
-        excess_returns = returns - risk_free_rate/252
-        annual_factor = np.sqrt(252)
-        if returns.std() == 0:
-            return 0
-        return annual_factor * excess_returns.mean() / returns.std()
+        return RiskEngine.calculate_sharpe_ratio(returns, risk_free_rate)
     except Exception as e:
         st.error(f"Sharpe Ratio 계산 중 오류 발생: {str(e)}")
         return 0
 
 def calculate_cvar(returns, confidence_level=0.95):
     try:
-        returns = returns.dropna()
-        if len(returns) < 2:
-            return 0
-        var = calculate_var(returns, confidence_level)
-        return returns[returns <= var].mean() if len(returns[returns <= var]) > 0 else 0
+        return RiskEngine.calculate_cvar(returns, confidence_level)
     except Exception as e:
         st.error(f"CVaR 계산 중 오류 발생: {str(e)}")
         return 0
@@ -75,22 +64,7 @@ def calculate_cvar(returns, confidence_level=0.95):
 def calculate_sortino_ratio(returns, risk_free_rate=0.02):
     """Sortino ratio using downside deviation for daily returns."""
     try:
-        returns = returns.dropna()
-        if len(returns) < 2:
-            return 0
-
-        # Convert to excess daily returns so annualised figures are consistent with Sharpe.
-        excess_daily_returns = returns - (risk_free_rate / 252)
-        downside_returns = excess_daily_returns[excess_daily_returns < 0]
-        if downside_returns.empty:
-            return 0
-
-        annualised_excess_return = excess_daily_returns.mean() * 252
-        downside_deviation = downside_returns.std() * np.sqrt(252)
-        if downside_deviation == 0:
-            return 0
-
-        return annualised_excess_return / downside_deviation
+        return RiskEngine.calculate_sortino_ratio(returns, risk_free_rate)
     except Exception as e:
         st.error(f"Sortino Ratio 계산 중 오류 발생: {str(e)}")
         return 0

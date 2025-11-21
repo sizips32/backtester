@@ -61,73 +61,19 @@ def fetch_stock_data(
         st.error(f"{ticker} 데이터 로드 실패: {str(e)}")
         return None
 
+from modules.backtesting_engine import BacktestingEngine
+
 def calculate_portfolio_value(data, weights):
-    """벡터화된 포트폴리오 가치 계산"""
-    # NA 값을 먼저 처리한 후 수익률 계산
-    data_filled = data.ffill()
-    returns = data_filled.pct_change()
-    # 열 정렬 및 누락 자산은 0 가중치로 안전 처리
-    weights_series = pd.Series(weights).reindex(returns.columns, fill_value=0)
-    weighted_returns = (returns * weights_series).sum(axis=1)
-    return (1 + weighted_returns).cumprod()
+    """
+    벡터화된 포트폴리오 가치 계산 (BacktestingEngine 위임)
+    """
+    return BacktestingEngine.calculate_portfolio_value(data, weights)
 
 def calculate_metrics(returns):
-    """포트폴리오 성과 및 리스크 지표 계산"""
-    # 기본 수익률 지표
-    annual_return = returns.mean() * 252
-    annual_vol = returns.std() * np.sqrt(252)
-    sharpe_ratio = annual_return / annual_vol
-    
-    # 최대 낙폭 계산
-    cum_returns = (1 + returns).cumprod()
-    rolling_max = cum_returns.expanding().max()
-    drawdowns = cum_returns/rolling_max - 1
-    max_drawdown = drawdowns.min()
-    
-    # 추가 리스크 지표
-    neg_returns = returns[returns < 0]
-    if len(neg_returns) > 0:
-        sortino_div = neg_returns.std() * np.sqrt(252)
-        sortino_ratio = annual_return / sortino_div
-    else:
-        sortino_ratio = np.nan
-    
-    # VaR 및 CVaR (95% 신뢰수준)
-    var_95 = np.percentile(returns, 5)
-    cvar_95 = returns[returns <= var_95].mean()
-    
-    # 칼마 비율 (Calmar Ratio)
-    if max_drawdown != 0:
-        calmar_ratio = annual_return / abs(max_drawdown)
-    else:
-        calmar_ratio = np.nan
-    
-    # 월별 평균 수익률 및 표준편차
-    monthly_return = returns.groupby(pd.Grouper(freq='ME')).apply(
-        lambda x: (1 + x).prod() - 1
-    )
-    if monthly_return.empty:
-        avg_monthly_return = np.nan
-        monthly_vol = np.nan
-        positive_months = np.nan
-    else:
-        avg_monthly_return = monthly_return.mean()
-        monthly_vol = monthly_return.std()
-        positive_months = (monthly_return > 0).sum() / len(monthly_return)
-    
-    return {
-        "연간 수익률": annual_return,
-        "연간 변동성": annual_vol,
-        "Sharpe Ratio": sharpe_ratio,
-        "Maximum Drawdown": max_drawdown,
-        "Sortino Ratio": sortino_ratio,
-        "Calmar Ratio": calmar_ratio,
-        "VaR (95%)": var_95,
-        "CVaR (95%)": cvar_95,
-        "월 평균 수익률": avg_monthly_return,
-        "월간 변동성": monthly_vol,
-        "양의 수익 개월 비율": positive_months
-    }
+    """
+    포트폴리오 성과 및 리스크 지표 계산 (BacktestingEngine 위임)
+    """
+    return BacktestingEngine.calculate_metrics(returns)
 
 def save_portfolio(name, assets, weights):
     """포트폴리오 목표 비중을 DB에 저장"""

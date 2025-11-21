@@ -130,16 +130,29 @@ class DataService:
         if cached_data is not None:
             return cached_data
         
+        # 데이터 가져오기 (캐시 미스)
+        try:
+            df = _self._fetch_from_source(ticker, start_date, end_date)
+            
+            if df is not None and not df.empty:
+                _self._set_cached_data(cache_key, df)
+                return df
+        except Exception as e:
+            portfolio_logger.logger.error(f"Error fetching data for {ticker}: {str(e)}")
+            
+        return None
+
+    def _fetch_from_source(self, ticker: str, start_date: datetime, end_date: datetime) -> Optional[pd.DataFrame]:
+        """실제 데이터 소스(yfinance)에서 데이터 가져오기"""
         # 한국 종목의 경우 여러 변형을 시도 (.KS -> .KQ)
-        candidates = _self._korean_ticker_variants(ticker)
+        candidates = self._korean_ticker_variants(ticker)
         for sym in candidates:
-            for attempt in range(_self.max_retries):
+            for attempt in range(self.max_retries):
                 try:
                     # yfinance 우선 시도
                     ticker_obj = yf.Ticker(sym)
                     df = ticker_obj.history(start=start_date, end=end_date)
                     if df is not None and not df.empty:
-                        _self._set_cached_data(cache_key, df)
                         return df
 
                     # yfinance 폴백
@@ -152,18 +165,16 @@ class DataService:
                     )
 
                     if df is not None and not df.empty:
-                        _self._set_cached_data(cache_key, df)
                         return df
 
                 except Exception as e:
-                    if attempt < _self.max_retries - 1:
+                    if attempt < self.max_retries - 1:
                         time.sleep(2 ** attempt)  # 지수 백오프
                         continue
                     # UI에 의존하지 않고 로깅만 수행
                     portfolio_logger.logger.error(
                         f"DATA_FETCH_FAILED: {sym} | Error: {str(e)}"
                     )
-                
         return None
     
     def fetch_multiple_stocks(

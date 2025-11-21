@@ -4,11 +4,6 @@ import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-from optimization import (
-    optimize_minimum_variance,
-    optimize_risk_parity,
-    optimize_markowitz
-)
 from services.data_service import data_service
 
 # 데이터베이스 및 리포지토리 import
@@ -16,31 +11,15 @@ from utils.database import get_db
 from repository.portfolio_repo import get_all_portfolios, get_portfolio_by_id
 from repository.target_weights_repo import get_portfolio_target_weights, set_portfolio_target_weights
 from repository.holdings_repo import get_portfolio_holdings
+from modules.optimization_engine import OptimizationEngine
 
 def portfolio_stats(weights, returns):
     """포트폴리오 통계 계산"""
-    portfolio_return = np.sum(returns.mean() * weights) * 252
-    portfolio_vol = np.sqrt(
-        np.dot(weights.T, np.dot(returns.cov() * 252, weights))
-    )
-    sharpe_ratio = portfolio_return / portfolio_vol
-    return portfolio_return, portfolio_vol, sharpe_ratio
+    return OptimizationEngine.calculate_portfolio_stats(weights, returns)
 
 def optimize_portfolio(returns, method='markowitz'):
     """최적화 로직 개선"""
-    n_assets = returns.shape[1]
-    
-    optimization_methods = {
-        'equal_weight': lambda: np.array([1/n_assets] * n_assets),
-        'minimum_variance': lambda: optimize_minimum_variance(returns),
-        'risk_parity': lambda: optimize_risk_parity(returns),
-        'markowitz': lambda: optimize_markowitz(returns)
-    }
-    
-    if method not in optimization_methods:
-        raise ValueError(f"지원하지 않는 최적화 방법: {method}")
-        
-    return optimization_methods[method]()
+    return OptimizationEngine.optimize_portfolio(returns, method)
 
 def get_strategy_description(method):
     """투자 전략 설명을 반환"""
